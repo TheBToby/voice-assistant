@@ -100,6 +100,18 @@ tab so the auth cookie is set) is good for a health check, but for actual
    **`ws://localhost:7880`** (resolved on *your* laptop through the tunnel)
    and the token, click **Connect & talk** — ask: *"Wie spät ist es?"*
 
+5. **Chrome/Edge only**: Chromium excludes loopback addresses from WebRTC
+   peer connections by default, so ICE toward `127.0.0.1` is silently
+   skipped ("could not establish pc connection"). Restart the browser with
+   the loopback flag allowed:
+   ```bash
+   # macOS (quit Chrome completely first):
+   open -na "Google Chrome" --args --allow-loopback-in-peer-connection
+   # Linux:
+   google-chrome --allow-loopback-in-peer-connection
+   ```
+   Firefox and Safari do not need this flag.
+
 Notes: `NODE_IP` (livekit-server `$NODE_IP`) must be empty for LAN
 deployments so the server advertises its real address; 127.0.0.1 is only
 correct together with the tunnel. The `make token` URL hint reflects
