@@ -68,6 +68,35 @@ token (`make token ID=web-1 ROOM=home`), click **Connect & talk**.
 > The data-message log line shows `assistant.event` payloads (e.g. timer
 > expiry) — the same messages the device can consume.
 
+### In a Coder workspace (remote, no LAN access)
+
+When the stack runs inside a Coder workspace, use the Coder proxies instead
+of LAN IPs — the wildcard HTTPS access also provides the secure context the
+microphone needs. The workspace template exposes LiveKit signaling via a
+`coder_app` (slug `livekit-7880`, share = owner):
+
+| What | URL |
+|---|---|
+| Web test client (port 8080) | `https://8080--main--<workspace>--<owner>.<coder-domain>/` (VS Code port forwarding) |
+| LiveKit signaling (port 7880) | `wss://livekit-7880--main--<workspace>--<owner>.<coder-domain>` (dashboard app "LiveKit Signaling (7880)") |
+
+For this deployment (`coder.baechtold.rocks`, workspace `voice-assistant`,
+owner `tobias-baechtold`):
+
+1. Start the test client:
+   `docker compose --profile web up -d webtest`
+2. Mint a token — `PUBLIC_LIVEKIT_WS_URL` in `.env` already points at the
+   proxied signaling URL, so the printed URL hint is correct:
+   `make token ID=web-1 ROOM=home`
+3. Open the web test client, paste the signaling URL
+   `wss://livekit-7880--main--voice-assistant--tobias-baechtold.coder.baechtold.rocks`
+   and the token, click **Connect & talk** — then ask: *"Wie spät ist es?"*
+
+Notes: app-proxy URLs require your Coder login (share = owner). The 7880
+`coder_app` was added to the `docker` template — apply it to the workspace
+once via a workspace update/restart (dashboard or `coder update`).
+
+
 ## 4. Console mode (agent on your dev machine)
 
 Runs the agent with your laptop mic/speakers — handy for prompt iteration:

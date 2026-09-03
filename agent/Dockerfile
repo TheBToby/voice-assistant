@@ -17,7 +17,12 @@ COPY scripts/ /app/scripts/
 COPY tests/ /app/tests/
 
 RUN useradd --create-home --shell /bin/bash agent \
-    && chown -R agent:agent /home/agent /app
+    && chown -R agent:agent /home/agent /app \
+    # /home/agent/.cache is a Docker volume mount point (model-cache). It must
+    # exist with agent ownership in the image so a FRESH named volume inherits
+    # it - otherwise the volume is created root-owned and model downloads fail.
+    && mkdir -p /home/agent/.cache/huggingface \
+    && chown -R agent:agent /home/agent/.cache
 USER agent
 
 WORKDIR /app/agent
