@@ -1,0 +1,25 @@
+# --- Secrets / environment ---
+.env
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# --- Model caches (mounted volumes in production) ---
+.cache/
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# --- ESP-IDF build artifacts ---
+build/
+sdkconfig.old
+managed_components/
+dependencies.lock

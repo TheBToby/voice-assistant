@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Voice Assistant - Web Test Client</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background: #10151c; color: #e6edf3;
+         max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.3rem; }
+  label { display: block; margin-top: 1rem; font-size: .9rem; color: #9fb0c0; }
+  input { width: 100%; padding: .55rem; margin-top: .25rem; border-radius: 8px;
+          border: 1px solid #2d3b4a; background: #0b1117; color: #e6edf3;
+          font-family: ui-monospace, monospace; }
+  button { margin-top: 1rem; padding: .6rem 1.2rem; border: 0; border-radius: 8px;
+           background: #1f7a4d; color: white; font-size: 1rem; cursor: pointer; }
+  button.danger { background: #a13232; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { margin-top: 1rem; font-family: ui-monospace, monospace; font-size: .85rem;
+            white-space: pre-wrap; background: #0b1117; border: 1px solid #2d3b4a;
+            border-radius: 8px; padding: .8rem; min-height: 6rem; }
+  .hint { color: #9fb0c0; font-size: .85rem; }
+</style>
+</head>
+<body>
+<h1>Voice Assistant &mdash; Web Test Client</h1>
+<p class="hint">
+  Talks to the voice assistant through the same LiveKit room the reSpeaker XVF3800
+  uses. Get a token with <code>make token ID=web-1 ROOM=home</code>.
+  Note: microphone access requires a secure context (localhost or HTTPS).
+</p>
+
+<label>LiveKit URL (ws:// or wss://)
+  <input id="url" placeholder="ws://192.168.1.50:7880" />
+</label>
+<label>Access token
+  <input id="token" placeholder="paste token from scripts/token.py" />
+</label>
+<label>Room (must match the token's room)
+  <input id="room" value="home" />
+</label>
+
+<button id="connect">Connect &amp; talk</button>
+<button id="disconnect" class="danger" disabled>Disconnect</button>
+
+<div id="status">idle</div>
+<audio id="remote-audio" autoplay></audio>
+
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.min.js"></script>
+<script>
+  const statusEl = document.getElementById('status');
+  const connectBtn = document.getElementById('connect');
+  const disconnectBtn = document.getElementById('disconnect');
+  let room = null;
+
+  function log(msg) {
+    statusEl.textContent += (statusEl.textContent ? '\\n' : '') +
+      new Date().toLocaleTimeString() + '  ' + msg;
+  }
+
+  connectBtn.addEventListener('click', async () => {
+    const url = document.getElementById('url').value.trim();
+    const token = document.getElementById('token').value.trim();
+    if (!url || !token) { log('ERROR: url and token are required'); return; }
+    try {
+      room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
+
+      room.on('participantConnected', p => log('participant connected: ' + p.identity));
+      room.on('participantDisconnected', p => log('participant left: ' + p.identity));
+      room.on('trackSubscribed', (track, pub, participant) => {
+        log('subscribed to ' + track.kind + ' from ' + participant.identity);
+        if (track.kind === 'audio') {
+          track.attach(document.getElementById('remote-audio'));
+        }
+      });
+      room.on('disconnected', () => log('disconnected'));
+      room.on('dataReceived', (payload) => {
+        log('event: ' + new TextDecoder().decode(payload));
+      });
+
+      log('connecting to ' + url + ' ...');
+      await room.connect(url, token);
+      log('connected to room: ' + room.name);
+
+      await room.localParticipant.setMicrophoneEnabled(true);
+      log('microphone live - start talking');
+      connectBtn.disabled = true;
+      disconnectBtn.disabled = false;
+    } catch (err) {
+      log('ERROR: ' + err.message);
+    }
+  });
+
+  disconnectBtn.addEventListener('click', async () => {
+    if (room) { await room.disconnect(); room = null; }
+    connectBtn.disabled = false;
+    disconnectBtn.disabled = true;
+    log('session ended');
+  });
+</script>
+</body>
+</html>

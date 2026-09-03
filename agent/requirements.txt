@@ -1,0 +1,14 @@
+# NOTE on pinning:
+# livekit-agents 1.6.1+ depends on `livekit-local-inference`, whose native
+# wheel requires an x86-64-v2 CPU (SSE4.2). Older/VM CPUs (e.g. QEMU "Common
+# KVM") crash with SIGILL on import. 1.5.17 provides the same API surface we
+# use (MCPToolset/MCPServerHTTP, elevenlabs STT/TTS incl. scribe_v2_realtime
+# streaming, EnglishModel turn detector) and runs on any x86-64 CPU.
+# On a modern CPU you may try bumping to '~=1.7.1'.
+livekit-agents[mcp,elevenlabs,openai,silero,turn-detector]==1.5.17
+python-dotenv>=1.0
+# used by scripts/smoke_test.py which runs inside this image
+livekit-api>=1.0
+httpx>=0.27
+# numpy 2.x wheels also require the x86-64-v2 CPU baseline
+numpy~=1.26.4

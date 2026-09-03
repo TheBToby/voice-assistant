@@ -1,0 +1,33 @@
+# LiveKit self-hosted server configuration
+# https://docs.livekit.io/home/self-hosting/deployment/
+#
+# API keys are injected via the LIVEKIT_KEYS environment variable
+# (see docker-compose.yml) so secrets stay out of this file.
+
+port: 7880
+bind_addresses:
+  - "0.0.0.0"
+
+rtc:
+  # TCP fallback port for WebRTC (for clients where UDP is blocked)
+  tcp_port: 7881
+  # UDP port range used for media (WebRTC host/server-reflexive candidates)
+  port_range_start: 50000
+  port_range_end: 50200
+  # On a LAN (default deployment) leave false: the server advertises its
+  # local interface addresses. Set true only when running on a cloud VM
+  # with a public IP.
+  use_external_ip: false
+
+# TURN relay for restrictive networks / remote access.
+# For internet-facing deployments enable this (requires TLS certs) or run
+# coturn - see docs/deployment.md.
+turn:
+  enabled: false
+  # domain: voice.example.com
+  # tls_port: 5349
+  # secret: a-long-random-turn-secret
+
+logging:
+  level: info
+  json: false

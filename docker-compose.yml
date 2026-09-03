@@ -1,0 +1,134 @@
+# ============================================================================
+# Self-hosted AI voice assistant stack
+#   livekit      - WebRTC media server (self-hosted LiveKit)
+#   weather-mcp  - bundled MCP server for weather (Open-Meteo, no API key)
+#   agent        - LiveKit Agents voice pipeline (ElevenLabs STT/TTS, OpenAI
+#                  LLM, MCP tools: Home Assistant + weather + custom)
+#   webtest      - static browser test client (for laptop smoke testing)
+#
+# Profiles:
+#   smoke -> one-shot end-to-end smoke test container
+#   tls   -> Caddy reverse proxy for wss:// + https:// (public deployments)
+#
+# Notes:
+#   * Linux host networking is used so WebRTC host candidates work on a LAN
+#     without STUN/TURN. On macOS/Windows or for bridge networking see
+#     docs/deployment.md.
+#   * All configuration comes from .env (see .env.example).
+# ============================================================================
+name: voice-assistant
+
+services:
+  livekit:
+    image: livekit/livekit-server:v1.9.10
+    restart: unless-stopped
+    network_mode: host
+    command: --config /etc/livekit/livekit.yaml
+    environment:
+      # "key: secret" mapping, see https://docs.livekit.io/deploy/custom/deployments/
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+      TZ: ${TZ:-Etc/UTC}
+    volumes:
+      - ./livekit/livekit.yaml:/etc/livekit/livekit.yaml:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  weather-mcp:
+    build:
+      context: ./services/weather-mcp
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PORT: ${WEATHER_MCP_PORT:-8100}
+      WEATHER_DEFAULT_LOCATION: ${DEFAULT_LOCATION:-}
+      WEATHER_DEFAULT_UNITS: ${WEATHER_UNITS:-metric}
+      TZ: ${TZ:-Etc/UTC}
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  agent:
+    build:
+      context: .
+      dockerfile: agent/Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    environment:
+      LIVEKIT_URL: ${LIVEKIT_URL:-ws://localhost:7880}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      TZ: ${TZ:-Etc/UTC}
+    volumes:
+      # caches for silero VAD + turn-detector model downloads
+      - model-cache:/home/agent/.cache
+    depends_on:
+      - livekit
+      - weather-mcp
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  webtest:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${WEB_TEST_PORT:-8080}:80"
+    volumes:
+      - ./tests/web:/usr/share/nginx/html:ro
+    profiles: ["web"]
+
+  # One-shot end-to-end smoke test:
+  #   docker compose --profile smoke run --rm smoke
+  smoke:
+    build:
+      context: .
+      dockerfile: agent/Dockerfile
+    network_mode: host
+    profiles: ["smoke"]
+    env_file: .env
+    environment:
+      LIVEKIT_URL: ${LIVEKIT_URL:-ws://localhost:7880}
+      TZ: ${TZ:-Etc/UTC}
+    volumes:
+      - model-cache:/home/agent/.cache
+    command:
+      - python
+      - /app/scripts/smoke_test.py
+      - --url
+      - ${LIVEKIT_URL:-ws://localhost:7880}
+
+  # Optional TLS termination for public deployments (wss://your.domain):
+  #   docker compose --profile tls up -d
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    profiles: ["tls"]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      VA_DOMAIN: ${VA_DOMAIN:-localhost}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  model-cache:
+  caddy_data:
+  caddy_config:
