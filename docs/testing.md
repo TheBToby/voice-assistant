@@ -85,11 +85,16 @@ tab so the auth cookie is set) is good for a health check, but for actual
 2. Mint a token (workspace): `make token ID=web-1 ROOM=home` — with
    `PUBLIC_LIVEKIT_WS_URL=ws://localhost:7880` and `NODE_IP=127.0.0.1`
    (both in `.env`), LiveKit advertises loopback ICE candidates
-3. On your **laptop**, tunnel signal + media ports:
+3. On your **laptop** (NOT in the workspace shell — inside the workspace the
+   command fails with `bind: address already in use` because LiveKit already
+   listens on 7880 there), tunnel signal + media ports. Requires the Coder
+   CLI (`curl -L https://coder.com/install.sh | sh`) and
+   `coder login https://coder.baechtold.rocks` on the laptop:
    ```bash
    coder port-forward tobias-baechtold/voice-assistant \
      --tcp 7880:7880 --tcp 7881:7881 --udp 50000-50200:50000-50200
    ```
+   Keep this running while you test.
 4. Open the web test client via the forwarded 8080 port
    (`https://8080--main--<workspace>--<owner>.<coder-domain>/`), enter
    **`ws://localhost:7880`** (resolved on *your* laptop through the tunnel)
