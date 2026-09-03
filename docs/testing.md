@@ -59,6 +59,10 @@ docker compose logs -f agent
 docker compose --profile web up -d webtest   # nginx serving tests/web
 ```
 
+The LiveKit client SDK is vendored at `tests/web/livekit-client.umd.js`
+(pinned v2.22.2 UMD build) and served same-origin — the test client needs no
+CDN access.
+
 Open `http://<host-ip>:8080`, paste the URL (`ws://<host-ip>:7880`) and a
 token (`make token ID=web-1 ROOM=home`), click **Connect & talk**.
 

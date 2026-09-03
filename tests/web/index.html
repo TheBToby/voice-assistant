@@ -47,7 +47,10 @@
 <div id="status">idle</div>
 <audio id="remote-audio" autoplay></audio>
 
-<script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.min.js"></script>
+<!-- LiveKit client SDK, vendored (pinned v2.22.2, UMD build) so the test
+     client works without CDN access. Update with:
+     curl -o livekit-client.umd.js https://cdn.jsdelivr.net/npm/livekit-client@<ver>/dist/livekit-client.umd.js -->
+<script src="./livekit-client.umd.js"></script>
 <script>
   const statusEl = document.getElementById('status');
   const connectBtn = document.getElementById('connect');
