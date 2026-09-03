@@ -27,6 +27,11 @@ services:
     environment:
       # "key: secret" mapping, see https://docs.livekit.io/deploy/custom/deployments/
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+      # Advertised ICE candidate IP (consumed by livekit-server as $NODE_IP).
+      # Empty = auto-detect (LAN deployments). Set NODE_IP=127.0.0.1 in .env
+      # for remote voice testing via "coder port-forward" (browser on your
+      # laptop reaches the tunneled loopback ports).
+      NODE_IP: ${NODE_IP:-}
       TZ: ${TZ:-Etc/UTC}
     volumes:
       - ./livekit/livekit.yaml:/etc/livekit/livekit.yaml:ro

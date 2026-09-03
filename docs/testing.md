@@ -74,31 +74,31 @@ token (`make token ID=web-1 ROOM=home`), click **Connect & talk**.
 
 ### In a Coder workspace (remote, no LAN access)
 
-When the stack runs inside a Coder workspace, use the Coder proxies instead
-of LAN IPs — the wildcard HTTPS access also provides the secure context the
-microphone needs. The workspace template exposes LiveKit signaling via a
-`coder_app` (slug `livekit-7880`, share = owner):
+When the stack runs inside a Coder workspace, plain LAN IPs don't work and
+the Coder proxy only carries HTTP/WebSocket — **not WebRTC media (UDP)**.
+Signal-only access via the app proxy (`wss://livekit-7880--...`, dashboard
+app "LiveKit Signaling (7880)", owner-shared: open its URL once in a normal
+tab so the auth cookie is set) is good for a health check, but for actual
+**voice** use Coder's TCP/UDP tunnel from your laptop:
 
-| What | URL |
-|---|---|
-| Web test client (port 8080) | `https://8080--main--<workspace>--<owner>.<coder-domain>/` (VS Code port forwarding) |
-| LiveKit signaling (port 7880) | `wss://livekit-7880--main--<workspace>--<owner>.<coder-domain>` (dashboard app "LiveKit Signaling (7880)") |
+1. `docker compose --profile web up -d webtest` (workspace)
+2. Mint a token (workspace): `make token ID=web-1 ROOM=home` — with
+   `PUBLIC_LIVEKIT_WS_URL=ws://localhost:7880` and `NODE_IP=127.0.0.1`
+   (both in `.env`), LiveKit advertises loopback ICE candidates
+3. On your **laptop**, tunnel signal + media ports:
+   ```bash
+   coder port-forward tobias-baechtold/voice-assistant \
+     --tcp 7880:7880 --tcp 7881:7881 --udp 50000-50200:50000-50200
+   ```
+4. Open the web test client via the forwarded 8080 port
+   (`https://8080--main--<workspace>--<owner>.<coder-domain>/`), enter
+   **`ws://localhost:7880`** (resolved on *your* laptop through the tunnel)
+   and the token, click **Connect & talk** — ask: *"Wie spät ist es?"*
 
-For this deployment (`coder.baechtold.rocks`, workspace `voice-assistant`,
-owner `tobias-baechtold`):
-
-1. Start the test client:
-   `docker compose --profile web up -d webtest`
-2. Mint a token — `PUBLIC_LIVEKIT_WS_URL` in `.env` already points at the
-   proxied signaling URL, so the printed URL hint is correct:
-   `make token ID=web-1 ROOM=home`
-3. Open the web test client, paste the signaling URL
-   `wss://livekit-7880--main--voice-assistant--tobias-baechtold.coder.baechtold.rocks`
-   and the token, click **Connect & talk** — then ask: *"Wie spät ist es?"*
-
-Notes: app-proxy URLs require your Coder login (share = owner). The 7880
-`coder_app` was added to the `docker` template — apply it to the workspace
-once via a workspace update/restart (dashboard or `coder update`).
+Notes: `NODE_IP` (livekit-server `$NODE_IP`) must be empty for LAN
+deployments so the server advertises its real address; 127.0.0.1 is only
+correct together with the tunnel. The `make token` URL hint reflects
+`PUBLIC_LIVEKIT_WS_URL`; the URL field in the client is what counts.
 
 
 ## 4. Console mode (agent on your dev machine)
