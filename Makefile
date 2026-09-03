@@ -44,7 +44,7 @@ ps: ## Show service status
 
 .PHONY: token
 token: ## Mint an access token: make token ID=device-1 ROOM=home
-	python3 scripts/mint_token.py --identity $(or $(ID),device-1) --room $(or $(ROOM),home)
+	docker compose run --rm agent python /app/scripts/mint_token.py --identity $(or $(ID),device-1) --room $(or $(ROOM),home)
 
 .PHONY: smoke
 smoke: ## Run the end-to-end smoke test (stack must be up)

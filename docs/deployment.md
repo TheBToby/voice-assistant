@@ -99,8 +99,9 @@ Details: https://docs.livekit.io/home/self-hosting/deployment/
   Docker service at boot).
 - Logs: `docker compose logs -f [service]`, rotated (10 MB × 3).
 - Update: `git pull && docker compose build && docker compose up -d`
-- Token helper needs `livekit-api` locally: `pip install livekit-api`
-  (or run it in the image: `docker compose run --rm agent python /app/scripts/mint_token.py ...`)
+- Token helper: `make token ID=... ROOM=...` runs `mint_token.py` inside the
+  agent image (no local Python deps needed); the printed URL comes from
+  `PUBLIC_LIVEKIT_WS_URL`
 
 ## Troubleshooting
 
