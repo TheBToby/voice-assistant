@@ -18,6 +18,11 @@ rtc:
   # local interface addresses. Set true only when running on a cloud VM
   # with a public IP.
   use_external_ip: false
+  # Accept WebRTC traffic from loopback addresses (127.0.0.1). Required for
+  # remote testing where "coder port-forward" tunnels the browser's
+  # signal+media onto the server's loopback (NODE_IP=127.0.0.1). Keep false
+  # for plain LAN deployments.
+  enable_loopback_candidate: true
 
 # TURN relay for restrictive networks / remote access.
 # For internet-facing deployments enable this (requires TLS certs) or run
