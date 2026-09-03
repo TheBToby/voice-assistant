@@ -10,10 +10,11 @@ A low-latency, fully self-hosted voice assistant in the style of an Amazon Echo:
 - **STT/TTS**: ElevenLabs (Scribe v2 realtime STT, Turbo v2.5 TTS)
 - **LLM**: OpenAI-compatible API (OpenAI by default; Ollama/vLLM/LM Studio work via `OPENAI_BASE_URL`)
 - **Skills & integrations**: MCP servers — Home Assistant (official MCP Server
-  integration), a bundled weather MCP server (Open-Meteo, no API key), and any
-  custom MCP server via a single env var
+  integration) and any custom MCP server (e.g. weather) via a single env var
 - **Built-in skills**: current time/date, Echo-style countdown timers (with
   spoken announcements), plus everything your MCP servers provide
+- **Multi-language**: replies, STT/TTS and built-in skills follow `LANGUAGE`
+  (German by default, English built in)
 
 ## Why not vocode-core? (architecture verification)
 
@@ -30,8 +31,8 @@ showed it cannot support this stack:
 | ESP32 client | — | ✅ Official `livekit/client-sdk-esp32` (ESP32-S3) |
 
 Everything else from the original plan (self-hosted LiveKit, ElevenLabs, ESP32
-client SDK, MCP-based Home Assistant + weather) is supported as proposed and
-implemented here. See `docs/architecture.md` for details.
+client SDK, MCP-based Home Assistant + weather via your own MCP server) is
+supported as proposed and implemented here. See `docs/architecture.md` for details.
 
 ## Repository layout
 
@@ -43,9 +44,9 @@ implemented here. See `docs/architecture.md` for details.
 │   ├── main.py               # entrypoint (worker)
 │   ├── assistant.py          # Agent + built-in skills (time, timers)
 │   ├── config.py             # env-driven config & MCP server registry
+│   ├── i18n.py               # localization (German default, English)
 │   ├── timers.py, clock.py   # pure-logic skill modules (unit tested)
 │   └── Dockerfile
-├── services/weather-mcp/     # bundled MCP server (Open-Meteo) - skill template
 ├── scripts/
 │   ├── mint_token.py         # mint access tokens for devices/browsers
 │   └── smoke_test.py         # end-to-end smoke test (WebRTC round trip)
@@ -65,7 +66,7 @@ Prereqs: Linux host with Docker, devices on the same network.
 # 1. Configure
 cp .env.example .env
 $EDITOR .env                # set LIVEKIT_API_SECRET, ELEVEN_API_KEY, OPENAI_API_KEY,
-                            # DEFAULT_LOCATION (your city), TZ
+                            # LANGUAGE (default: de), DEFAULT_LOCATION (your city), TZ
 
 # 2. Start the stack
 docker compose up -d --build
@@ -88,10 +89,16 @@ Talk to it from any of:
   `http://localhost:8080`, paste URL + token
 - **Terminal** — run the agent locally in console mode (see `docs/testing.md`)
 
-Example things to say:
+Example things to say (with `LANGUAGE=de`, the default):
 
-> "What time is it?" · "Set a pizza timer for 7 minutes" · "What's the weather?"
-> "Turn off the kitchen light" (Home Assistant) · "Cancel the pizza timer"
+> "Wie spät ist es?" · "Stelle einen Pizza-Timer für 7 Minuten" · "Wie wird das
+> Wetter?" (via your configured weather MCP server) · "Mach das Küchenlicht
+> aus" (Home Assistant) · "Brech den Pizza-Timer ab"
+
+In English (`LANGUAGE=en`):
+
+> "What time is it?" · "Set a pizza timer for 7 minutes" · "Turn off the
+> kitchen light" · "Cancel the pizza timer"
 
 ## Documentation
 
@@ -109,9 +116,10 @@ The pipeline is optimized for the "say it, get an answer" feel:
 
 - Opus/WebRTC transport (~50–150 ms on LAN), XMOS AEC/beamforming on-device
 - Streaming ElevenLabs Scribe STT (partial transcripts as you speak)
-- Silero VAD + English turn detector for natural turn-taking
+- Silero VAD + language-matched turn detector (English or multilingual) for
+  natural turn-taking
 - `preemptive_generation=True` (TTS starts before the LLM finishes its sentence)
-- Function tools execute locally (µs) — only weather/HA calls hit the network
+- Function tools execute locally (µs) — only MCP tool calls hit the network
 
 Measured end-to-end on LAN with `gpt-4.1-mini`: typically **~0.8–1.5 s** from
 end-of-speech to first audio out.
@@ -122,4 +130,6 @@ end-of-speech to first audio out.
   turn-taking), like Echo in "follow-up" mode. Wake-word options are listed in
   `docs/architecture.md`.
 - The LiveKit ESP32 SDK is in **developer preview** (APIs may change).
-- Turn detector is English-only (set `ENABLE_TURN_DETECTOR=false` otherwise).
+- Built-in skill replies (time, timers) are localized for German (default) and
+  English; other `LANGUAGE` values fall back to English strings and VAD-only
+  endpointing (set `ENABLE_TURN_DETECTOR=false` to skip the model download).

@@ -19,7 +19,7 @@ build: ## Build all images
 	docker compose build
 
 .PHONY: up
-up: ## Start the stack (livekit + weather-mcp + agent)
+up: ## Start the stack (livekit + agent)
 	docker compose up -d
 
 .PHONY: down

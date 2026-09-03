@@ -1,9 +1,9 @@
 # ============================================================================
 # Self-hosted AI voice assistant stack
 #   livekit      - WebRTC media server (self-hosted LiveKit)
-#   weather-mcp  - bundled MCP server for weather (Open-Meteo, no API key)
 #   agent        - LiveKit Agents voice pipeline (ElevenLabs STT/TTS, OpenAI
-#                  LLM, MCP tools: Home Assistant + weather + custom)
+#                  LLM, MCP tools: Home Assistant + your MCP servers via
+#                  MCP_SERVERS_JSON)
 #   webtest      - static browser test client (for laptop smoke testing)
 #
 # Profiles:
@@ -36,28 +36,6 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  weather-mcp:
-    build:
-      context: ./services/weather-mcp
-    restart: unless-stopped
-    network_mode: host
-    environment:
-      PORT: ${WEATHER_MCP_PORT:-8100}
-      WEATHER_DEFAULT_LOCATION: ${DEFAULT_LOCATION:-}
-      WEATHER_DEFAULT_UNITS: ${WEATHER_UNITS:-metric}
-      TZ: ${TZ:-Etc/UTC}
-    healthcheck:
-      test: ["CMD", "python", "/app/healthcheck.py"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
   agent:
     build:
       context: .
@@ -74,7 +52,6 @@ services:
       - model-cache:/home/agent/.cache
     depends_on:
       - livekit
-      - weather-mcp
     logging:
       driver: json-file
       options:

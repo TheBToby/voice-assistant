@@ -43,19 +43,35 @@ LLM_MODEL=llama3.1:8b
 | Variable | Default | Description |
 |---|---|---|
 | `ASSISTANT_NAME` | `Atlas` | used in the default prompt |
+| `LANGUAGE` | `de` | assistant language: `de` (German, default) or `en` — see below |
 | `ASSISTANT_INSTRUCTIONS` | built-in prompt | full override of the system prompt |
-| `GREETING` | `Voice assistant ready.` | spoken on session start; empty = silent |
-| `ENABLE_TURN_DETECTOR` | `true` | English turn-detection model; `false` for other languages |
+| `GREETING` | `Sprachassistent bereit.` | spoken on session start; empty = silent |
+| `ENABLE_TURN_DETECTOR` | `true` | turn-detector model auto-picked from `LANGUAGE`; `false` to disable |
 | `DEFAULT_LOCATION` | — | default city for weather tools |
 | `WEATHER_UNITS` | `metric` | `metric` or `imperial` |
+
+## Multi-language
+
+`LANGUAGE` (default: `de`) controls:
+
+- the instruction to always answer in that language (default system prompt)
+- the ElevenLabs STT/TTS language hint
+- the built-in skill replies — time/date (24-hour clock in German) and timers
+  (`agent/i18n.py`)
+- the turn detector: English model for `en`, multilingual model for `de`,
+  VAD-only endpointing otherwise (`ENABLE_TURN_DETECTOR=false` skips the
+  model downloads entirely)
+
+Built-in strings exist for `de` and `en` only. Any other value is still
+passed to STT/TTS and the prompt, but built-in replies fall back to English
+and a warning is logged at agent start.
 
 ### MCP servers
 | Variable | Description |
 |---|---|
 | `HOME_ASSISTANT_URL` | e.g. `http://homeassistant.local:8123` (`/api/mcp` appended automatically) |
 | `HOME_ASSISTANT_TOKEN` | HA long-lived access token |
-| `WEATHER_MCP_URL` | default `http://localhost:8100/mcp`; empty disables |
-| `MCP_SERVERS_JSON` | JSON list for any extra MCP servers, see below |
+| `MCP_SERVERS_JSON` | JSON list for any MCP server (e.g. weather), see below |
 
 ## Home Assistant setup
 
@@ -96,10 +112,10 @@ Two options:
 1. **Function tool** (fastest): add a `@function_tool` method in
    `agent/assistant.py` — see `set_timer` for the pattern (docstring becomes
    the LLM-facing description).
-2. **MCP server** (decoupled, restartable independently): copy
-   `services/weather-mcp/` — a FastMCP app whose `@mcp.tool()` functions are
-   exposed to the agent automatically. Add it to `docker-compose.yml` and
-   register its URL via `MCP_SERVERS_JSON` or a dedicated env pair.
+2. **MCP server** (decoupled, no agent code changes): run any MCP server
+   (e.g. a FastMCP app whose `@mcp.tool()` functions are exposed to the
+   agent automatically) anywhere on your network and register its URL via
+   `MCP_SERVERS_JSON` — see the example above.
 
 ## Ports (host networking)
 
@@ -108,6 +124,5 @@ Two options:
 | 7880/tcp | LiveKit signaling (ws) |
 | 7881/tcp | LiveKit WebRTC TCP fallback |
 | 50000–50200/udp | LiveKit WebRTC media |
-| 8100/tcp | weather-mcp (for curl tests) |
 | 8080/tcp | webtest client (profile `web`) |
 | 80/443/tcp | Caddy (profile `tls`) |

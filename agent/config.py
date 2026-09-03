@@ -10,6 +10,9 @@ import json
 import os
 from dataclasses import dataclass, field
 
+from i18n import DEFAULT_LANGUAGE, PACKS, normalize_language
+from i18n import language_name as human_language_name
+
 DEFAULT_SYSTEM_PROMPT = """\
 You are {name}, a friendly and efficient home voice assistant.
 
@@ -20,6 +23,10 @@ You are {name}, a friendly and efficient home voice assistant.
 - If a request is ambiguous, ask a single short clarifying question.
 - Confirm completed actions in one brief sentence.
 
+# Language
+- Always answer in {language_name}, no matter which language the user speaks.
+- Format numbers, dates, times and durations naturally for {language_name}.
+
 # Built-in skills
 - Time & date: use the get_current_time tool whenever the user asks about
   the time or date. Never guess the time.
@@ -29,10 +36,11 @@ You are {name}, a friendly and efficient home voice assistant.
   short sentence.
 
 # Weather
-- Use the weather MCP tools (get_current_weather, get_weather_forecast).
-  The user's location is {default_location}. When it is empty or the user
-  asks about another place, ask which city they mean before calling the
-  tool. Temperatures are in {weather_units} units.
+- Weather data comes from the weather MCP server the user configured
+  (tools such as get_current_weather or get_weather_forecast). The user's
+  location is {default_location}. When it is empty or the user asks about
+  another place, ask which city they mean before calling the tool.
+  Temperatures are in {weather_units} units.
 
 # Home control
 - Home Assistant tools from the home-assistant MCP server let you control
@@ -78,16 +86,28 @@ class AgentSettings:
     instructions: str
     greeting: str
     enable_turn_detector: bool
+    language: str
     # MCP
     home_assistant_url: str
     home_assistant_token: str
-    weather_mcp_url: str
     mcp_servers_json: str
+
+    # ------------------------------------------------------------------
+    @property
+    def language_name(self) -> str:
+        """Human-readable configured language, e.g. 'de' -> 'German'."""
+        return human_language_name(self.language)
 
     # ------------------------------------------------------------------
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "AgentSettings":
         e = env if env is not None else dict(os.environ)
+        raw_language = e.get("LANGUAGE", DEFAULT_LANGUAGE)
+        language = (
+            normalize_language(raw_language)
+            or raw_language.strip().lower()
+            or DEFAULT_LANGUAGE
+        )
         instructions = e.get("ASSISTANT_INSTRUCTIONS") or ""
         if not instructions:
             instructions = DEFAULT_SYSTEM_PROMPT.format(
@@ -95,6 +115,7 @@ class AgentSettings:
                 default_location=e.get("DEFAULT_LOCATION", "")
                 or "not configured - ask the user for their city",
                 weather_units=e.get("WEATHER_UNITS", "metric"),
+                language_name=human_language_name(language),
             )
         return cls(
             livekit_url=e.get("LIVEKIT_URL", "ws://localhost:7880"),
@@ -113,15 +134,15 @@ class AgentSettings:
             instructions=instructions,
             greeting=e.get("GREETING", ""),
             enable_turn_detector=_to_bool(e.get("ENABLE_TURN_DETECTOR", "true")),
+            language=language,
             home_assistant_url=e.get("HOME_ASSISTANT_URL", "").rstrip("/"),
             home_assistant_token=e.get("HOME_ASSISTANT_TOKEN", ""),
-            weather_mcp_url=e.get("WEATHER_MCP_URL", ""),
             mcp_servers_json=e.get("MCP_SERVERS_JSON", ""),
         )
 
     # ------------------------------------------------------------------
     def mcp_servers(self) -> list[MCPServerSpec]:
-        """Resolve all configured MCP servers (HA + weather + generic JSON)."""
+        """Resolve all configured MCP servers (HA + generic JSON)."""
         servers: list[MCPServerSpec] = []
 
         if self.home_assistant_url and self.home_assistant_token:
@@ -137,9 +158,6 @@ class AgentSettings:
                     },
                 )
             )
-
-        if self.weather_mcp_url:
-            servers.append(MCPServerSpec(id="weather", url=self.weather_mcp_url))
 
         servers.extend(_parse_mcp_servers_json(self.mcp_servers_json))
 
@@ -163,6 +181,11 @@ class AgentSettings:
         if not self.openai_api_key and not self.openai_base_url:
             problems.append(
                 "OPENAI_API_KEY is empty (or set OPENAI_BASE_URL for a local LLM)"
+            )
+        if self.language not in PACKS:
+            problems.append(
+                f"LANGUAGE={self.language} has no built-in skill translations; "
+                "built-in replies fall back to English"
             )
         return problems
 

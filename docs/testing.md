@@ -83,11 +83,15 @@ LIVEKIT_URL=ws://<host>:7880 LIVEKIT_API_KEY=... LIVEKIT_API_SECRET=... \
 ## What to test manually (feature checklist)
 
 - [ ] "What time is it?" / "What's the date?" — answers via `get_current_time`
+- [ ] `LANGUAGE=de` (default): greeting "Sprachassistent bereit.", "Wie spät
+  ist es?" answered with 24-hour time ("Es ist ... Uhr"), timer confirmations
+  and expiry announcements in German
 - [ ] "Set a pizza timer for 7 minutes" — confirmation, then spoken expiry
   announcement + `assistant.event` data message
 - [ ] "Set another timer for 2 minutes called laundry" · "list my timers" ·
   "cancel the laundry timer"
-- [ ] "What's the weather?" / "... in Munich?" — via bundled weather MCP
+- [ ] "Wie wird das Wetter?" / "What's the weather?" — via the weather MCP
+  server you configured in `MCP_SERVERS_JSON`
 - [ ] Home Assistant: "turn off the kitchen light", "is the bedroom window
   open?" (requires HA MCP configured + entities exposed)
 - [ ] Interruption: start speaking while the agent talks — it should stop and

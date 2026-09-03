@@ -56,9 +56,21 @@ def build_session(settings: AgentSettings) -> AgentSession:
         stt_kwargs["model_id"] = settings.stt_model
     else:  # pragma: no cover - future plugin changes
         stt_kwargs["model"] = settings.stt_model
+    # language hint: `language_code` on livekit-agents 1.5.x, `language` on
+    # newer plugin versions
+    if "language_code" in stt_sig:
+        stt_kwargs["language_code"] = settings.language
+    elif "language" in stt_sig:
+        stt_kwargs["language"] = settings.language
     stt = elevenlabs.STT(**stt_kwargs)
 
-    tts = elevenlabs.TTS(model=settings.tts_model, voice_id=settings.tts_voice_id)
+    tts_kwargs: dict = {"model": settings.tts_model, "voice_id": settings.tts_voice_id}
+    # `language` improves pronunciation/text normalization; only the
+    # eleven_turbo_v2_5 model family accepts it
+    tts_sig = inspect.signature(elevenlabs.TTS.__init__).parameters
+    if "language" in tts_sig and "v2_5" in settings.tts_model:
+        tts_kwargs["language"] = settings.language
+    tts = elevenlabs.TTS(**tts_kwargs)
 
     llm_kwargs: dict = {"model": settings.llm_model}
     if settings.openai_base_url:
@@ -69,15 +81,7 @@ def build_session(settings: AgentSettings) -> AgentSession:
 
     turn_detection = None
     if settings.enable_turn_detector:
-        try:
-            from livekit.plugins.turn_detector.english import EnglishModel
-
-            turn_detection = EnglishModel()
-        except Exception:  # noqa: BLE001 - fall back to STT endpointing
-            logger.warning(
-                "turn detector unavailable, falling back to VAD endpointing",
-                exc_info=True,
-            )
+        turn_detection = _build_turn_detector(settings)
 
     return AgentSession(
         stt=stt,
@@ -89,11 +93,45 @@ def build_session(settings: AgentSettings) -> AgentSession:
     )
 
 
+def _build_turn_detector(settings: AgentSettings):
+    """Pick the turn detector matching the configured language.
+
+    English uses the dedicated English model, German the multilingual model
+    (both ship with the turn-detector extra; the multilingual model also
+    understands more languages if ever needed). Any other language falls
+    back to VAD endpointing. Set ENABLE_TURN_DETECTOR=false to skip the
+    model downloads entirely.
+    """
+    lang = settings.language
+    try:
+        if lang == "de":
+            from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
+            return MultilingualModel()
+        if lang == "en":
+            from livekit.plugins.turn_detector.english import EnglishModel
+
+            return EnglishModel()
+    except Exception:  # noqa: BLE001 - fall back to STT endpointing
+        logger.warning(
+            "turn detector unavailable, falling back to VAD endpointing",
+            exc_info=True,
+        )
+        return None
+    logger.info(
+        "no turn detector for language '%s'; using VAD endpointing", lang
+    )
+    return None
+
+
 async def entrypoint(ctx: JobContext) -> None:
     settings = AgentSettings.from_env()
     for problem in settings.validate():
         logger.warning("configuration: %s", problem)
 
+    logger.info(
+        "assistant language: %s (%s)", settings.language, settings.language_name
+    )
     logger.info("joining room %s", ctx.room.name)
     await ctx.connect()
 

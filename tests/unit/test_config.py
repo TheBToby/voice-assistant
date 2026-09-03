@@ -62,10 +62,43 @@ def test_home_assistant_ignored_without_token():
     assert all(s.id != "home-assistant" for s in servers)
 
 
-def test_weather_mcp_default_url():
+def test_weather_mcp_server_is_no_longer_bundled():
+    """The bundled weather MCP server was removed: WEATHER_MCP_URL no longer
+    registers anything. Weather comes from user-configured MCP_SERVERS_JSON."""
     env = base_env() | {"WEATHER_MCP_URL": "http://localhost:8100/mcp"}
+    servers = AgentSettings.from_env(env).mcp_servers()
+    assert all(s.id != "weather" for s in servers)
+
+
+def test_weather_from_user_configured_mcp_json():
+    env = base_env() | {
+        "MCP_SERVERS_JSON": json.dumps(
+            [{"id": "weather", "url": "http://localhost:9000/mcp"}]
+        )
+    }
     servers = {x.id: x for x in AgentSettings.from_env(env).mcp_servers()}
-    assert servers["weather"].url == "http://localhost:8100/mcp"
+    assert servers["weather"].url == "http://localhost:9000/mcp"
+
+
+def test_language_defaults_to_german():
+    s = AgentSettings.from_env(base_env())
+    assert s.language == "de"
+    assert s.language_name == "German"
+    assert "German" in s.instructions  # default prompt answers in German
+
+
+def test_language_override_and_normalization():
+    assert AgentSettings.from_env(base_env() | {"LANGUAGE": "en"}).language == "en"
+    assert AgentSettings.from_env(base_env() | {"LANGUAGE": "DE-de"}).language == "de"
+    assert AgentSettings.from_env(base_env() | {"LANGUAGE": "German"}).language == "de"
+    english = AgentSettings.from_env(base_env() | {"LANGUAGE": "en"})
+    assert "English" in english.instructions
+
+
+def test_unknown_language_is_kept_but_flagged():
+    s = AgentSettings.from_env(base_env() | {"LANGUAGE": "xx"})
+    assert s.language == "xx"
+    assert any("LANGUAGE" in p for p in s.validate())
 
 
 def test_extra_servers_from_json_and_dedup():

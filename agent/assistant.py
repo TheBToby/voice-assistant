@@ -2,7 +2,9 @@
 
 Built-in skills (time, timers) are implemented as LiveKit function tools;
 Home Assistant, weather and any additional capabilities are provided by
-remote MCP servers configured via environment variables.
+remote MCP servers configured via environment variables. Everything the
+agent says on its own behalf follows the language configured via LANGUAGE
+(default: German) - see i18n.py.
 """
 
 from __future__ import annotations
@@ -12,8 +14,9 @@ import logging
 
 from livekit.agents import Agent, RunContext, function_tool, mcp
 
-from clock import format_duration, now_text
+from clock import now_text
 from config import AgentSettings
+from i18n import Localizer
 from timers import TimerRecord, TimerService
 
 logger = logging.getLogger(__name__)
@@ -25,12 +28,14 @@ class Assistant(Agent):
         settings: AgentSettings,
         mcp_toolsets: list[mcp.MCPToolset],
         timers: TimerService | None = None,
+        localizer: Localizer | None = None,
     ) -> None:
         super().__init__(
             instructions=settings.instructions,
             tools=list(mcp_toolsets),
         )
         self.settings = settings
+        self.t = localizer or Localizer(settings.language)
         self.timers = timers or TimerService()
         self._session = None  # bound by the entrypoint once the session exists
 
@@ -46,7 +51,7 @@ class Assistant(Agent):
         """Get the current local date and time. Use this whenever the user
         asks for the time, the date, or the day of the week."""
 
-        return now_text()
+        return now_text(localizer=self.t)
 
     # ------------------------------------------------------------------
     # built-in skill: timers
@@ -68,19 +73,21 @@ class Assistant(Agent):
         """
         total = float(minutes) * 60 + float(seconds)
         if total <= 0:
-            return "The timer duration must be positive."
+            return self.t.message("timer_duration_invalid")
 
         try:
             record = await self.timers.start(
                 total, self._announce_timer_expired, name=name or None
             )
         except (ValueError, RuntimeError) as exc:
-            return f"Could not start the timer: {exc}"
+            return self.t.message("timer_start_failed", reason=exc)
 
-        label = f" called '{record.name}'" if not record.name.startswith("timer ") else ""
         logger.info("tool:set_timer -> %s (%.0fs)", record.name, total)
-        return (
-            f"Timer{label} started for {format_duration(total)}."
+        duration = self.t.format_duration(total)
+        if record.name.startswith("timer "):
+            return self.t.message("timer_started", duration=duration)
+        return self.t.message(
+            "timer_started_named", name=record.name, duration=duration
         )
 
     @function_tool
@@ -92,26 +99,33 @@ class Assistant(Agent):
         """
         record = self.timers.cancel(name)
         if record:
-            return f"Timer '{name}' cancelled."
-        running = ", ".join(t["name"] for t in self.timers.snapshot()) or "none"
-        return f"No timer named '{name}' is running. Running timers: {running}."
+            return self.t.message("timer_cancelled", name=name)
+        running = (
+            ", ".join(t["name"] for t in self.timers.snapshot())
+            or self.t.message("none")
+        )
+        return self.t.message("timer_not_found", name=name, running=running)
 
     @function_tool
     async def list_timers(self, context: RunContext) -> str:
         """List the currently running timers with their remaining time."""
         snapshot = self.timers.snapshot()
         if not snapshot:
-            return "No timers are running."
+            return self.t.message("no_timers_running")
         lines = [
-            f"- {t['name']}: {format_duration(t['remaining_seconds'])} remaining"
+            self.t.message(
+                "timer_remaining",
+                name=t["name"],
+                duration=self.t.format_duration(t["remaining_seconds"]),
+            )
             for t in snapshot
         ]
-        return "Running timers:\n" + "\n".join(lines)
+        return self.t.message("running_timers", list="\n".join(lines))
 
     # ------------------------------------------------------------------
     async def _announce_timer_expired(self, record: TimerRecord) -> None:
         """Speak the expiry announcement and notify room participants."""
-        text = f"{record.name.capitalize()} timer is done!"
+        text = self.t.message("timer_expired", name=record.name.capitalize())
         if self._session is not None:
             await self._session.say(text)
         await self._publish_event("timer.expired", {"name": record.name})

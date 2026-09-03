@@ -15,13 +15,13 @@
 │  esp32 firmware       │               │        │ health/token            │ MCP       │
 └───────────────────────┘               │        ▼                         ▼           │
                                         │  ┌──────────────┐    ┌─────────────────────┐ │
-┌───────────────────────┐   WebRTC      │  │ webtest      │    │ weather-mcp         │ │
-│ Browser test client   │◀──(via lk)───▶│  │ (nginx,      │    │ (FastMCP, Open-     │ │
-│ tests/web/index.html  │               │  │  optional)   │    │  Meteo, /mcp)       │ │
+┌───────────────────────┐   WebRTC      │  │ webtest      │    │ user-configured     │ │
+│ Browser test client   │◀──(via lk)───▶│  │ (nginx,      │    │ MCP servers         │ │
+│ tests/web/index.html  │               │  │  optional)   │    │ (MCP_SERVERS_JSON)  │ │
 └───────────────────────┘               │  └──────────────┘    └─────────────────────┘ │
                                         │                                              │
                                         │  outbound: ElevenLabs STT/TTS, OpenAI LLM,   │
-                                        │  Home Assistant MCP (/api/mcp), Open-Meteo   │
+                                        │  Home Assistant MCP (/api/mcp), custom MCP   │
                                         └──────────────────────────────────────────────┘
 ```
 
@@ -36,11 +36,11 @@ mic (XVF3800) ─ Opus/WebRTC ─ LiveKit room ─┐
                                     AgentSession
                                     ├─ VAD (silero) .............. end-of-turn detection
                                     ├─ STT (ElevenLabs Scribe v2 realtime, streaming)
-                                    ├─ turn detector (English model, optional)
+                                    ├─ turn detector (en or multilingual, auto by LANGUAGE)
                                     ├─ LLM (OpenAI gpt-4.1-mini / any OpenAI-compatible)
                                     │    ├─ function tools: get_current_time,
                                     │    │   set_timer, cancel_timer, list_timers
-                                    │    └─ MCP tools: home-assistant, weather, custom
+                                    │    └─ MCP tools: home-assistant + your servers
                                     ├─ TTS (ElevenLabs Turbo v2.5, streaming)
                                     └─ preemptive_generation=True
                                             │
@@ -56,10 +56,14 @@ Key behaviors:
   publishes an `assistant.event` data message (topic `assistant.event`) so
   devices can blink LEDs / show UI.
 - **MCP**: servers are resolved at session start from the environment
-  (`HOME_ASSISTANT_URL`/`TOKEN`, `WEATHER_MCP_URL`, generic `MCP_SERVERS_JSON`)
-  into `mcp.MCPToolset` entries, using `MCPServerHTTP` (streamable HTTP / SSE)
-  with per-server headers. A failing MCP server logs an error but does not
-  prevent the agent from starting.
+  (`HOME_ASSISTANT_URL`/`TOKEN`, generic `MCP_SERVERS_JSON` — e.g. a weather
+  server) into `mcp.MCPToolset` entries, using `MCPServerHTTP` (streamable
+  HTTP / SSE) with per-server headers. A failing MCP server logs an error but
+  does not prevent the agent from starting.
+- **Language**: `LANGUAGE` (default `de`) drives the system prompt, the
+  ElevenLabs STT/TTS language, the built-in skill strings (`agent/i18n.py`)
+  and the turn-detector choice (English model for `en`, multilingual model
+  for `de`, VAD-only endpointing otherwise).
 
 ## Component choices (verification result)
 
@@ -72,7 +76,8 @@ Key behaviors:
 | TTS | ElevenLabs `eleven_turbo_v2_5` | streaming, voice id configurable |
 | LLM | OpenAI-compatible | `gpt-4.1-mini` default; Ollama/vLLM via `OPENAI_BASE_URL` |
 | Home control | Home Assistant **MCP Server** integration | streamable HTTP `/api/mcp` + long-lived token |
-| Weather | Bundled FastMCP server (Open-Meteo) | no API key; template for new skills |
+| Weather | Any weather MCP server (user-configured) | register via `MCP_SERVERS_JSON` |
+| Language | `LANGUAGE` env (default `de`, `en` built in) | prompt, ElevenLabs STT/TTS, built-in skills, turn detector |
 
 ## Latency budget (LAN, typical)
 
@@ -98,7 +103,8 @@ contact.
   only entities *exposed to assistants* in HA are controllable (HA-side
   access control), and control can be disabled in the MCP integration.
 - Everything stays on the LAN except: ElevenLabs (STT/TTS audio), OpenAI
-  (text), Open-Meteo (weather). To keep audio local, see
+  (text) and any cloud MCP servers you configure (e.g. weather). To keep
+  audio local, see
   `docs/configuration.md` (local STT/TTS options) — the pipeline is
   provider-pluggable.
 - For internet exposure use the `tls` profile (Caddy, wss://) **plus** TURN;
