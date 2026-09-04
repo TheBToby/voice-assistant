@@ -15,6 +15,9 @@
 #     without STUN/TURN. On macOS/Windows or for bridge networking see
 #     docs/deployment.md.
 #   * All configuration comes from .env (see .env.example).
+#   * Persistent data (model cache, Caddy certificates/config) defaults to
+#     named Docker volumes; set MODEL_CACHE_DIR, CADDY_DATA_DIR and
+#     CADDY_CONFIG_DIR in .env to bind-mount specific host folders instead.
 # ============================================================================
 name: voice-assistant
 
@@ -53,8 +56,10 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       TZ: ${TZ:-Etc/UTC}
     volumes:
-      # caches for silero VAD + turn-detector model downloads
-      - model-cache:/home/agent/.cache
+      # Model downloads (silero VAD, turn detector) = persistent data.
+      # MODEL_CACHE_DIR empty -> named volume "model-cache";
+      # set MODEL_CACHE_DIR=/abs/or/./path in .env to bind-mount a host folder.
+      - ${MODEL_CACHE_DIR:-model-cache}:/home/agent/.cache
     depends_on:
       - livekit
     logging:
@@ -85,7 +90,8 @@ services:
       LIVEKIT_URL: ${LIVEKIT_URL:-ws://localhost:7880}
       TZ: ${TZ:-Etc/UTC}
     volumes:
-      - model-cache:/home/agent/.cache
+      # same persistent model cache as the agent (keeps smoke runs fast)
+      - ${MODEL_CACHE_DIR:-model-cache}:/home/agent/.cache
     command:
       - python
       - /app/scripts/smoke_test.py
@@ -105,8 +111,11 @@ services:
       VA_DOMAIN: ${VA_DOMAIN:-localhost}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+      # TLS certificates and Caddy's own config = persistent data.
+      # CADDY_DATA_DIR / CADDY_CONFIG_DIR empty -> named volumes
+      # caddy_data / caddy_config; set them in .env to bind-mount host folders.
+      - ${CADDY_DATA_DIR:-caddy_data}:/data
+      - ${CADDY_CONFIG_DIR:-caddy_config}:/config
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

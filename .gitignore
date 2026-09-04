@@ -11,6 +11,7 @@ venv/
 
 # --- Model caches (mounted volumes in production) ---
 .cache/
+.model-cache/
 
 # --- Editors / OS ---
 .idea/

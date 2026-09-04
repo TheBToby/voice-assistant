@@ -38,8 +38,11 @@ docker compose up -d --build     # livekit + agent
 docker compose ps
 ```
 
-First start downloads the Silero VAD and turn-detector models into the
-`model-cache` volume; the agent logs `assistant ready` when done:
+First start downloads the Silero VAD and turn-detector models into the model
+cache (named volume `model-cache`, or a host folder of your choice via
+`MODEL_CACHE_DIR` — see the "Persistent data locations" block in
+`.env.example`; `CADDY_DATA_DIR`/`CADDY_CONFIG_DIR` work the same way for the
+`tls` profile); the agent logs `assistant ready` when done:
 
 ```bash
 docker compose logs -f agent
