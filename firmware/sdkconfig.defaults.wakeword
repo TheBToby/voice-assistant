@@ -1,0 +1,24 @@
+# Wake word overlay defaults - append to the project's sdkconfig.defaults or
+# build with: idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.wakeword" build
+
+# XIAO ESP32-S3 has 8 MB flash; the example default (4 MB) cannot fit the app
+# plus the wake-word model partition (see firmware/partitions.csv).
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# ESP-SR: keep the selected models in the "model" flash partition.
+# The esp-sr build then adds srmodels.bin to `idf.py flash` automatically.
+CONFIG_MODEL_IN_FLASH=y
+
+# Wake word model - enable exactly ONE under menuconfig ->
+# "ESP Speech Recognition" -> "Load Multiple Wake Words", e.g.:
+#   Hi Lexin (English, default):        CONFIG_SR_WN_WN9_HILEXIN=y
+#   Hi ESP (English):                   CONFIG_SR_WN_WN9_HIESP=y
+#   Alexa (English):                    CONFIG_SR_WN_WN9_ALEXA=y
+# See docs/esp32-xvf3800.md (section 6) for custom (e.g. German) phrases.
+CONFIG_SR_WN_WN9_HILEXIN=y
+
+# Wake word gating tuning (all have menuconfig defaults; see Kconfig.projbuild)
+CONFIG_WAKE_WORD_ENABLE=y
+CONFIG_WAKE_WORD_PRE_BUFFER_MS=1500
+CONFIG_WAKE_WORD_FOLLOWUP_TIMEOUT_S=10
+CONFIG_WAKE_WORD_DET_THRESHOLD=50

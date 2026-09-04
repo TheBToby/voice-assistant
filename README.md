@@ -47,6 +47,8 @@ supported as proposed and implemented here. See `docs/architecture.md` for detai
 │   ├── i18n.py               # localization (German default, English)
 │   ├── timers.py, clock.py   # pure-logic skill modules (unit tested)
 │   └── Dockerfile
+├── firmware/                  # ESP32-side wake word (ESP-SR WakeNet) overlay
+│                              # for the voice_agent firmware (firmware/README.md)
 ├── scripts/
 │   ├── mint_token.py         # mint access tokens for devices/browsers
 │   └── smoke_test.py         # end-to-end smoke test (WebRTC round trip)
@@ -107,7 +109,8 @@ In English (`LANGUAGE=en`):
 | `docs/architecture.md` | System design, data flow, latency budget, security model |
 | `docs/deployment.md` | Step-by-step deployment, TLS/public access, autostart, troubleshooting |
 | `docs/configuration.md` | Every env var, swapping LLM/providers, adding MCP servers & skills |
-| `docs/esp32-xvf3800.md` | Flashing the XVF3800/XIAO ESP32-S3 with the LiveKit client firmware |
+| `docs/esp32-xvf3800.md` | Flashing the XVF3800/XIAO ESP32-S3 with the LiveKit client firmware + the wake-word overlay |
+| `firmware/README.md` | On-device wake word (ESP-SR WakeNet): overlay install, tuning, custom phrases |
 | `docs/testing.md` | Unit tests, smoke test, browser client, console mode |
 
 ## Latency notes
@@ -126,9 +129,15 @@ end-of-speech to first audio out.
 
 ## Known limitations / roadmap
 
-- **No on-device wake word yet** — the agent is always listening (VAD-based
-  turn-taking), like Echo in "follow-up" mode. Wake-word options are listed in
-  `docs/architecture.md`.
+- **On-device wake word (ESP-SR WakeNet)** — the reSpeaker gates its microphone
+  until the wake phrase is heard (connected standby: the room stays joined,
+  silence is published while armed, pre-wake audio is flushed on wake, local
+  chime + LED hooks, Echo-style follow-up window). Overlay lives in
+  `firmware/` — see `firmware/README.md` and `docs/esp32-xvf3800.md` §6.
+  Stock models are English/Chinese; custom phrases (e.g. German) need
+  Espressif's WakeNet customization, a microWakeWord model, or LiveKit's
+  [`livekit-wakeword`](https://github.com/livekit/livekit-wakeword) once its
+  ESP32 runtime ships (the engine seam is swappable).
 - The LiveKit ESP32 SDK is in **developer preview** (APIs may change).
 - Built-in skill replies (time, timers) are localized for German (default) and
   English; other `LANGUAGE` values fall back to English strings and VAD-only

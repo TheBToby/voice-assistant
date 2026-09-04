@@ -1,0 +1,11 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+# Wake word overlay: adds the esp-sr "model" partition (srmodels.bin) and
+# grows the app partition to 4 MB. Requires the 8 MB flash of the XIAO
+# ESP32-S3 (CONFIG_ESPTOLPY_FLASHSIZE_8MB in sdkconfig.defaults.wakeword).
+# Replaces the voice_agent example's partitions.csv.
+# Note: if you change the phy_init or app partition offset, make sure to
+# change the offset in Kconfig.projbuild
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, 0x10000, 4M,
+model,    data, spiffs,  ,        3M,

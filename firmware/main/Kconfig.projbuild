@@ -1,0 +1,134 @@
+menu "LiveKit Example"
+
+    config LK_EXAMPLE_CODEC_BOARD_TYPE
+        string "Codec board type"
+        default "DUMMY_CODEC_BOARD"
+        help
+            The model of dev board you are using. See board_cfg.txt from the codec
+            board component for a list of supported boards.
+
+    choice LK_EXAMPLE_CONNECTION_METHOD
+        prompt "Choose room connection method"
+        help
+            Choose how to connect to the room in the example.
+
+        config LK_EXAMPLE_USE_SANDBOX
+            bool "Sandbox token"
+            help
+                Use a sandbox token server for room authentication.
+
+        config LK_EXAMPLE_USE_PREGENERATED
+            bool "Pre-generated token"
+            help
+                Use a pre-generated token and server URL for room connection.
+    endchoice
+
+    config LK_EXAMPLE_SERVER_URL
+        depends on LK_EXAMPLE_USE_PREGENERATED
+        string "Server URL"
+        default "ws://localhost:7880"
+        help
+            The server URL to use for room connection.
+    config LK_EXAMPLE_TOKEN
+        depends on LK_EXAMPLE_USE_PREGENERATED
+        string "Token"
+        help
+            The token to use for room connection.
+
+    config LK_EXAMPLE_SANDBOX_ID
+        depends on LK_EXAMPLE_USE_SANDBOX
+        string "Sandbox ID"
+        help
+            The ID of the sandbox token server to use.
+    config LK_EXAMPLE_ROOM_NAME
+        depends on LK_EXAMPLE_USE_SANDBOX
+        string "Room name (optional)"
+        help
+            Specific room name sandbox tokens will be generated with.
+    config LK_EXAMPLE_PARTICIPANT_NAME
+        depends on LK_EXAMPLE_USE_SANDBOX
+        string "Participant name (optional)"
+        help
+            Specific participant name sandbox tokens will be generated with.
+
+    config LK_EXAMPLE_SPEAKER_VOLUME
+        int "Default speaker volume (0-100%)"
+        default 85
+        range 0 100
+        help
+            Default playback volume for speaker output.
+endmenu
+
+menu "Wake Word"
+
+    config WAKE_WORD_ENABLE
+        bool "Enable on-device wake word (gates the microphone publish)"
+        default y
+        help
+            Connected standby: the room stays joined as usual, but the capture
+            source publishes digital silence until the wake word is detected.
+            On wake the pre-wake audio buffer is flushed and live audio flows.
+            If disabled (or if the engine fails to initialize) the device falls
+            back to the original always-listening behavior.
+
+    config WAKE_WORD_PRE_BUFFER_MS
+        int "Pre-wake audio buffer (ms)"
+        depends on WAKE_WORD_ENABLE
+        range 0 3000
+        default 1500
+        help
+            How much audio before the wake word is kept and flushed into the
+            pipeline on wake, so the wake phrase itself reaches the STT.
+            Uses PSRAM (32 bytes per ms at 16 kHz mono).
+
+    config WAKE_WORD_FOLLOWUP_TIMEOUT_S
+        int "Follow-up window before re-arming (s)"
+        depends on WAKE_WORD_ENABLE
+        range 1 120
+        default 10
+        help
+            After a wake, the device stays awake until no speech is detected
+            for this many seconds (Echo-style follow-up mode).
+
+    config WAKE_WORD_SPEECH_RMS_THRESHOLD
+        int "Speech RMS threshold for the follow-up window"
+        depends on WAKE_WORD_ENABLE
+        range 50 10000
+        default 500
+        help
+            Linear RMS level (of 32767) above which captured audio counts as
+            speech for the follow-up window. Lower = stays awake easier.
+
+    config WAKE_WORD_DET_THRESHOLD
+        int "WakeNet detection threshold (percent)"
+        depends on WAKE_WORD_ENABLE
+        range 10 99
+        default 50
+        help
+            WakeNet confidence threshold. Lower = more sensitive but more
+            false wakes; raise if the device wakes spuriously.
+
+    config WAKE_WORD_CHIME_ENABLE
+        bool "Play a local chime on wake"
+        depends on WAKE_WORD_ENABLE
+        default y
+        help
+            Play a short two-note chime on the speaker immediately on wake.
+            Rendered procedurally; the XMOS AEC keeps it out of the mic path.
+
+    config WAKE_WORD_CHIME_RATE
+        int "Chime playback sample rate (Hz)"
+        depends on WAKE_WORD_CHIME_ENABLE
+        default 16000
+        help
+            Must match the playback stream configured by the codec board.
+
+    config WAKE_WORD_CHIME_CHANNELS
+        int "Chime playback channels (1=mono, 2=stereo)"
+        depends on WAKE_WORD_CHIME_ENABLE
+        range 1 2
+        default 2
+        help
+            Must match the playback stream configured by the codec board
+            (the example renderer uses 2 channels at 16 kHz).
+endmenu

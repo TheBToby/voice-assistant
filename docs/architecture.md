@@ -110,14 +110,45 @@ contact.
 - For internet exposure use the `tls` profile (Caddy, wss://) **plus** TURN;
   rotate `LIVEKIT_API_SECRET` and keep it out of git (`.gitignore`).
 
-## Wake word (roadmap)
+## Wake word
 
-The current firmware is always-listening with VAD turn-taking. Options to add
-an Echo-like wake word later:
+Implemented as an **on-device wake word with connected standby** (overlay in
+`firmware/`, applied to the `voice_agent` firmware - see `firmware/README.md`
+and `docs/esp32-xvf3800.md` §6):
 
-1. **ESP32-side**: wake-word model on the XIAO ESP32-S3 (e.g. ESP-SR
-   "WakeNet") gating `room.connect()` — keeps the server out of the loop.
-2. **Agent-side**: filter utterances in the agent (e.g. via
-   `on_user_input_transcript`) until a wake phrase is seen — simplest, but
-   audio still streams and VAD still triggers turns.
+```
+                        ┌───────────────────── XIAO ESP32-S3 ─────────────────────┐
+XMOS XU316 ── I2S ──▶  │ esp_capture AEC source ──▶ gating wrapper               │
+(4-mic, AEC,  NS)      │   (mono 16 kHz PCM)        ├─▶ WakeNet detector (esp-sr) │
+                       │                            ├─▶ pre-wake ring buffer      │
+                       │                            └─▶ ARMED: silence → Opus     │
+                       │                                ACTIVE: buffer + live     │
+                       │ state: ARMED ──wake──▶ ACTIVE ──(10 s quiet)──▶ ARMED     │
+                       │ feedback: local chime + wake_word_led_* hooks             │
+                       └───────────────────────────────────────────────────────────┘
+```
+
+- **Room lifecycle unchanged**: the device joins at boot (agent greets once),
+  timer announcements and `assistant.event` data messages keep working. Only
+  the *audio leaving the device* is gated.
+- **On wake** the pre-wake buffer (default 1.5 s) is flushed ahead of the live
+  audio, so the wake phrase itself reaches the STT; a procedurally generated
+  chime plays locally; after a 10 s quiet window the gate re-arms.
+- **Engine seam is swappable** (`firmware/main/wake_word_engine.h`): ESP-SR
+  WakeNet ships as default; microWakeWord (TFLite-Micro) or livekit-wakeword
+  models (once LiveKit ships an ESP32 runtime) drop in without touching the
+  capture path. Stock models are English/Chinese; custom phrases (e.g. German)
+  need Espressif's WakeNet customization, a microWakeWord model, or the
+  livekit-wakeword route.
+- **Graceful degradation**: if the engine fails to init (no model partition,
+  format mismatch, OOM) the firmware falls back to always-listening.
+
+Alternatives considered (see the git history of this section for details):
+
+| Option | Verdict |
+|---|---|
+| **A. Disconnected standby** (connect on wake, `hello-wakeword` style) | Max privacy, but +0.5-1.5 s wake latency (WebRTC connect + agent dispatch), re-triggers the greeting per session, and timer announcements would be missed while disconnected. |
+| **B. Connected standby (implemented)** | No added latency, greeting stays a boot event, timer events keep working, graceful degradation. |
+| **C. Agent-side transcript filter** | No firmware change, but all audio is always streamed to cloud STT (privacy/cost), and turn-taking still triggers. |
+| **D. Host-side gate** (e.g. [livekit/livekit-wakeword](https://github.com/livekit/livekit-wakeword) in the agent before STT) | Zero-firmware custom phrases (multilingual, Apache-2.0, 100× fewer false positives than vanilla openWakeWord), but chime/LED are triggered from the host (+50-250 ms, host dependency). Good stopgap; its models are the planned future on-device engine. |
 
