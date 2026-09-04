@@ -55,6 +55,11 @@ services:
       LIVEKIT_URL: ${LIVEKIT_URL:-ws://localhost:7880}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       TZ: ${TZ:-Etc/UTC}
+      # ONNX Runtime (silero VAD / turn detector): full telemetry opt-out. The
+      # device ID it would otherwise persist under ~/.cache (= the model-cache
+      # volume) fails on non-user-owned mounts and logs
+      # "Failed to persist telemetry device ID; using an in-memory identifier".
+      ORT_DISABLE_TELEMETRY: "1"
     volumes:
       # Model downloads (silero VAD, turn detector) = persistent data.
       # MODEL_CACHE_DIR empty -> named volume "model-cache";
@@ -89,6 +94,8 @@ services:
     environment:
       LIVEKIT_URL: ${LIVEKIT_URL:-ws://localhost:7880}
       TZ: ${TZ:-Etc/UTC}
+      # same ONNX Runtime telemetry opt-out as the agent service
+      ORT_DISABLE_TELEMETRY: "1"
     volumes:
       # same persistent model cache as the agent (keeps smoke runs fast)
       - ${MODEL_CACHE_DIR:-model-cache}:/home/agent/.cache

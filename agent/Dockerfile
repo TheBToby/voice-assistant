@@ -1,8 +1,17 @@
 FROM python:3.12-slim
 
+# ONNX Runtime (ships with the silero VAD / turn-detector plugins) is built with
+# Microsoft telemetry. Without this opt-out it persists a telemetry device ID
+# under ~/.cache/Microsoft/DeveloperTools/.onnxruntime and warns
+#   "Failed to persist telemetry device ID; using an in-memory identifier"
+# whenever ~/.cache (= the model-cache volume mount) is not owned by the
+# container user - e.g. root-owned MODEL_CACHE_DIR bind mounts, stale root-owned
+# volumes, or rootless-Docker uid mapping. This env var latches a full opt-out
+# before ORT initializes: no device ID, no telemetry uploader, no warning.
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    HOME=/home/agent
+    HOME=/home/agent \
+    ORT_DISABLE_TELEMETRY=1
 
 WORKDIR /app
 
