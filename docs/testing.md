@@ -1,6 +1,6 @@
 # Testing guide
 
-Three layers, from fast to end-to-end:
+Four layers, from fast to end-to-end:
 
 ## 1. Unit tests (host, no services needed)
 
@@ -11,8 +11,10 @@ make unit-tests          # python3 -m pytest tests/unit -v
 
 Covers the pure-logic modules: timer service (expiry, cancel, auto-names,
 duplicate rejection), clock formatting, agent config (MCP registry, HA URL
-join, validation), and smoke-test helpers (WAV chunking, RMS). The tests stub
-`livekit`/`httpx`, so nothing heavy is installed on the host.
+join, validation, console runtime overrides), the agent's audit reporter,
+and the web console (settings model, auth primitives, audit normalization,
+SQLite store). The tests stub `livekit`/`httpx`, so nothing heavy is
+installed on the host.
 
 ## 2. Smoke test (running stack, no human required)
 
@@ -55,20 +57,25 @@ docker compose logs -f agent
 
 ## 3. Browser test client (interactive, from a laptop)
 
+The test client is the **Talk** tab of the web console (it replaced the
+former standalone `webtest` page):
+
 ```bash
-docker compose --profile web up -d webtest   # nginx serving tests/web
+docker compose up -d console                # part of the default stack
+open http://localhost:8090/talk             # or http://<host-ip>:8090/talk
 ```
 
-The LiveKit client SDK is vendored at `tests/web/livekit-client.umd.js`
-(pinned v2.22.2 UMD build) and served same-origin — the test client needs no
-CDN access.
+Sign in (console credentials), click **Connect & talk** — the token is
+minted server-side, no CLI needed. Manual tokens still work (paste one from
+`make token ID=web-1 ROOM=home`).
 
-Open `http://<host-ip>:8080`, paste the URL (`ws://<host-ip>:7880`) and a
-token (`make token ID=web-1 ROOM=home`), click **Connect & talk**.
+The LiveKit client SDK is vendored at
+`ui/static/talk/livekit-client.umd.js` (pinned v2.22.2 UMD build) and served
+same-origin — the test client needs no CDN access.
 
 > Microphone access needs a *secure context*: browse from `localhost`, via
 > the `tls` profile (https://), or run Chrome with
-> `--unsafely-treat-insecure-origin-as-secure=http://<host-ip>:8080`.
+> `--unsafely-treat-insecure-origin-as-secure=http://<host-ip>:8090`.
 > The data-message log line shows `assistant.event` payloads (e.g. timer
 > expiry) — the same messages the device can consume.
 
@@ -81,8 +88,9 @@ app "LiveKit Signaling (7880)", owner-shared: open its URL once in a normal
 tab so the auth cookie is set) is good for a health check, but for actual
 **voice** use Coder's TCP/UDP tunnel from your laptop:
 
-1. `docker compose --profile web up -d webtest` (workspace)
-2. Mint a token (workspace): `make token ID=web-1 ROOM=home` — with
+1. `docker compose up -d console` (workspace; console on port 8090)
+2. Open the console **Talk** tab (or mint a token:
+   `make token ID=web-1 ROOM=home`) — with
    `PUBLIC_LIVEKIT_WS_URL=ws://localhost:7880` and `NODE_IP=127.0.0.1`
    (both in `.env`), LiveKit advertises loopback ICE candidates
 3. On your **laptop** (NOT in the workspace shell — inside the workspace the
@@ -95,10 +103,10 @@ tab so the auth cookie is set) is good for a health check, but for actual
      --tcp 7880:7880 --tcp 7881:7881 --udp 50000-50200:50000-50200
    ```
    Keep this running while you test.
-4. Open the web test client via the forwarded 8080 port
-   (`https://8080--main--<workspace>--<owner>.<coder-domain>/`), enter
+4. Open the console **Talk** tab via the forwarded 8090 port
+   (`https://8090--main--<workspace>--<owner>.<coder-domain>/talk`), enter
    **`ws://localhost:7880`** (resolved on *your* laptop through the tunnel)
-   and the token, click **Connect & talk** — ask: *"Wie spät ist es?"*
+   and connect — ask: *"Wie spät ist es?"*
 
 5. **Chrome/Edge only**: Chromium excludes loopback addresses from WebRTC
    peer connections by default, so ICE toward `127.0.0.1` is silently

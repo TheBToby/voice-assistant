@@ -46,6 +46,14 @@ ps: ## Show service status
 token: ## Mint an access token: make token ID=device-1 ROOM=home
 	docker compose run --rm agent python /app/scripts/mint_token.py --identity $(or $(ID),device-1) --room $(or $(ROOM),home)
 
+.PHONY: console
+console: ## Open the web console URL (default port 8090)
+	@echo "http://localhost:$(or $(PORT),$(UI_PORT))  (UI_PORT in .env)"
+
+.PHONY: logs-console
+logs-console: ## Tail console (web UI) logs only
+	docker compose logs -f --tail=200 console
+
 .PHONY: smoke
 smoke: ## Run the end-to-end smoke test (stack must be up)
 	docker compose --profile smoke build smoke

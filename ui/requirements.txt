@@ -1,0 +1,7 @@
+# Web console (FastAPI) - pinned like agent/requirements.txt for reproducible
+# self-hosted builds. httpx is shared with the agent's dependency set.
+fastapi>=0.115,<1.0
+uvicorn>=0.30,<1.0
+httpx>=0.27
+# LiveKit server API: room/participant queries + access token minting
+livekit-api>=1.0

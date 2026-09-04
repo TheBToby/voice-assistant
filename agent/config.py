@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from i18n import DEFAULT_LANGUAGE, PACKS, normalize_language
 from i18n import language_name as human_language_name
@@ -91,6 +91,16 @@ class AgentSettings:
     home_assistant_url: str
     home_assistant_token: str
     mcp_servers_json: str
+    # Web console (configuration & diagnostics UI); empty = console unused
+    console_url: str = ""
+    console_token: str = ""
+    audit_enabled: bool = True
+    # runtime-only (never set from env): comes from the console's
+    # "Store transcripts" setting via apply_overrides()
+    transcripts_enabled: bool = False
+    # MCP servers managed in the web console; first definition per id wins,
+    # so these shadow MCP_SERVERS_JSON entries and Home Assistant
+    extra_mcp_specs: tuple[MCPServerSpec, ...] = ()
 
     # ------------------------------------------------------------------
     @property
@@ -138,12 +148,19 @@ class AgentSettings:
             home_assistant_url=e.get("HOME_ASSISTANT_URL", "").rstrip("/"),
             home_assistant_token=e.get("HOME_ASSISTANT_TOKEN", ""),
             mcp_servers_json=e.get("MCP_SERVERS_JSON", ""),
+            console_url=_console_url(e),
+            console_token=_internal_token(e),
+            audit_enabled=not _to_bool(e.get("CONSOLE_AUDIT_DISABLED", "")),
         )
 
     # ------------------------------------------------------------------
     def mcp_servers(self) -> list[MCPServerSpec]:
-        """Resolve all configured MCP servers (HA + generic JSON)."""
-        servers: list[MCPServerSpec] = []
+        """Resolve all configured MCP servers (console + HA + generic JSON).
+
+        Order matters: the first definition per id wins, so console-managed
+        servers shadow MCP_SERVERS_JSON entries and Home Assistant.
+        """
+        servers: list[MCPServerSpec] = list(self.extra_mcp_specs)
 
         if self.home_assistant_url and self.home_assistant_token:
             # Official Home Assistant "Model Context Protocol Server"
@@ -193,6 +210,106 @@ class AgentSettings:
 # ----------------------------------------------------------------------
 def _to_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _console_url(env: dict) -> str:
+    """Base URL of the web console (empty disables audit/runtime config)."""
+    explicit = (env.get("CONSOLE_URL", "") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    # default: the console service in the same stack (host networking)
+    port = (env.get("UI_PORT", "") or "").strip() or "8090"
+    return f"http://localhost:{port}"
+
+
+def _internal_token(env: dict) -> str:
+    """Shared secret for the console's /internal API.
+
+    Same derivation as the console (ui/app/auth_core.py): an explicit
+    CONSOLE_INTERNAL_TOKEN wins, otherwise the value is derived from
+    LIVEKIT_API_SECRET, which agent and console both know.
+    """
+    explicit = (env.get("CONSOLE_INTERNAL_TOKEN", "") or "").strip()
+    if explicit:
+        return explicit
+    secret = env.get("LIVEKIT_API_SECRET", "") or ""
+    if not secret:
+        return ""
+    import hashlib
+    import hmac as _hmac
+
+    return _hmac.new(
+        secret.encode(), b"voice-assistant/console-internal", hashlib.sha256
+    ).hexdigest()[:40]
+
+
+# settings the console may override, mapped 1:1 onto AgentSettings fields
+_CONSOLE_SETTING_FIELDS: tuple[str, ...] = (
+    "assistant_name",
+    "language",
+    "assistant_instructions",
+    "greeting",
+    "default_location",
+    "weather_units",
+    "stt_model",
+    "tts_model",
+    "tts_voice_id",
+    "llm_model",
+    "openai_base_url",
+    "home_assistant_url",
+    "home_assistant_token",
+)
+
+
+def apply_overrides(base: AgentSettings, payload: dict) -> AgentSettings:
+    """Merge the console's GET /internal/config payload into the settings.
+
+    Pure function: returns a new AgentSettings (frozen dataclass). Unknown
+    keys are ignored; a malformed payload yields the env-built base so the
+    assistant keeps working when the console sends garbage.
+    """
+    if not isinstance(payload, dict):
+        return base
+    values = payload.get("settings")
+    if not isinstance(values, dict):
+        values = {}
+
+    updates: dict[str, object] = {}
+    for key in _CONSOLE_SETTING_FIELDS:
+        if values.get(key) is not None:
+            value = str(values[key])
+            if key == "language":
+                # console values arrive pre-normalized, but stay defensive
+                value = normalize_language(value)
+            updates[key] = value
+    if values.get("enable_turn_detector") is not None:
+        updates["enable_turn_detector"] = _to_bool(
+            str(values["enable_turn_detector"])
+        )
+    if "transcripts_enabled" in payload:
+        updates["transcripts_enabled"] = bool(payload.get("transcripts_enabled"))
+
+    specs: list[MCPServerSpec] = []
+    for entry in payload.get("mcp_servers") or []:
+        try:
+            specs.append(
+                MCPServerSpec(
+                    id=str(entry["id"]),
+                    url=str(entry["url"]),
+                    headers={
+                        str(k): str(v)
+                        for k, v in (entry.get("headers") or {}).items()
+                    },
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    if specs:
+        updates["extra_mcp_specs"] = tuple(specs)
+
+    if not updates:
+        return base
+    return replace(base, **updates)
 
 
 def _parse_mcp_servers_json(raw: str) -> list[MCPServerSpec]:

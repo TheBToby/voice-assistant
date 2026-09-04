@@ -10,15 +10,17 @@
 │ reSpeaker XVF3800     │   Opus/SRTP   │  │ LiveKit      │◀──────▶│ agent          │  │
 │  XMOS XU316           │◀────wss/ws───▶│  │ Server       │  ws:// │ (livekit-      │  │
 │  (AEC, NS, beamform)  │               │  │ (self-hosted)│        │  agents 1.7)   │  │
-│  XIAO ESP32-S3        │               │  └──────────────┘        └───────┬────────┘  │
-│  livekit/client-sdk-  │               │        ▲                         │           │
-│  esp32 firmware       │               │        │ health/token            │ MCP       │
-└───────────────────────┘               │        ▼                         ▼           │
-                                        │  ┌──────────────┐    ┌─────────────────────┐ │
-┌───────────────────────┐   WebRTC      │  │ webtest      │    │ user-configured     │ │
-│ Browser test client   │◀──(via lk)───▶│  │ (nginx,      │    │ MCP servers         │ │
-│ tests/web/index.html  │               │  │  optional)   │    │ (MCP_SERVERS_JSON)  │ │
-└───────────────────────┘               │  └──────────────┘    └─────────────────────┘ │
+│  XIAO ESP32-S3        │               │  └──────▲───────┘        └───────┬────────┘  │
+│  livekit/client-sdk-  │               │        │ health/token      runtime   │
+└───────────────────────┘               │        ▼                   config +   │
+                                        │  ┌──────────────┐    audit events     │
+┌───────────────────────┐   WebRTC      │  │ console      │◀───────────────────┘
+│ Browser (console UI / │◀──(via lk)───▶│  │ (FastAPI UI  │     ┌─────────────────────┐
+│ Talk tab)             │               │  │  + REST API, │     │ user-configured     │
+└───────────────────────┘               │  │  SQLite)     │     │ MCP servers         │
+                                        │  └──────────────┘     │ (UI-managed, or     │
+                                        │                       │ MCP_SERVERS_JSON)   │
+                                        │                       └─────────────────────┘
                                         │                                              │
                                         │  outbound: ElevenLabs STT/TTS, OpenAI LLM,   │
                                         │  Home Assistant MCP (/api/mcp), custom MCP   │
@@ -95,10 +97,40 @@ Key behaviors:
 greeting path (`session.say`) bypasses the LLM entirely for instant first
 contact.
 
+## Web console & audit trail
+
+The `console` service (FastAPI + SQLite in the `console-data` volume) is the
+control plane around the agent:
+
+- **Runtime configuration**: effective settings = env defaults + UI
+  overrides (SQLite). The agent fetches them via `GET /internal/config`
+  (bearer token derived from `LIVEKIT_API_SECRET` or
+  `CONSOLE_INTERNAL_TOKEN`) at every session start, so UI changes apply
+  without restarts. Console-managed MCP servers shadow
+  `MCP_SERVERS_JSON`/Home Assistant entries with the same id.
+- **Diagnostics**: the agent reports sessions, device joins/leaves, tool
+  calls, timer events, errors and heartbeats via `POST /internal/events`
+  (batched every 2 s, dropped on failure - never blocks the voice
+  pipeline). The console enriches these with live LiveKit server API data
+  (rooms/participants) and per-MCP-server probes.
+- **Audit trail**: append-only event log with configurable retention
+  (`diagnostics_history_days`, hourly cleanup). Transcripts (utterances and
+  replies) are stored only when explicitly enabled - off by default,
+  enforced on both sides. Login attempts and configuration changes (who,
+  what) are recorded too.
+
+Details and the API surface: `docs/console.md`.
+
 ## Security model
 
 - LiveKit API key/secret only in `.env` on the server; devices get **scoped
-  JWTs** (room-restricted, time-limited) minted by `scripts/mint_token.py`.
+  JWTs** (room-restricted, time-limited) minted by `scripts/mint_token.py`
+  or the console (audited).
+- Console access is protected by local credentials (`UI_EMAIL`/`UI_PASSWORD`,
+  constant-time compare, HttpOnly signed cookies + CSRF header) or SSO via
+  OIDC; the agent/console internal API uses a separate bearer token.
+  Transcript storage is opt-in; the audit trail stores metadata only by
+  default.
 - Home Assistant access uses a **long-lived token** with least privilege:
   only entities *exposed to assistants* in HA are controllable (HA-side
   access control), and control can be disabled in the MCP integration.

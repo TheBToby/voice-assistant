@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Voice Assistant - Talk (browser test client)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="../style.css" />
+<style>
+  body { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+  label { display: block; margin-top: 1rem; font-size: .9rem; color: var(--muted); }
+  #status { margin-top: 1rem; font-family: ui-monospace, monospace; font-size: .85rem;
+            white-space: pre-wrap; background: var(--panel); border: 1px solid var(--border);
+            border-radius: 8px; padding: .8rem; min-height: 6rem; }
+  .back { display: inline-block; margin-bottom: 1rem; color: #7ab8ff; }
+</style>
+</head>
+<body>
+<a class="back" href="../">&#8592; Back to console</a>
+<h1>Talk to the assistant</h1>
+<p class="hint">
+  Joins the same LiveKit room as the reSpeaker XVF3800. A short-lived access
+  token is minted by the console - no CLI needed.
+  Microphone access requires a secure context (localhost or HTTPS).
+</p>
+
+<label>LiveKit URL (ws:// or wss://) - pre-filled from the console settings
+  <input id="url" placeholder="ws://192.168.1.50:7880" />
+</label>
+<label>Identity (unique per browser tab)
+  <input id="identity" />
+</label>
+<label>Room
+  <input id="room" value="home" />
+</label>
+<label>Access token (optional - minted automatically when empty)
+  <input id="token" placeholder="auto" />
+</label>
+
+<button id="connect">Connect &amp; talk</button>
+<button id="disconnect" class="danger" disabled>Disconnect</button>
+
+<div id="status">idle</div>
+<audio id="remote-audio" autoplay></audio>
+
+<!-- LiveKit client SDK, vendored (pinned v2.22.2, UMD build) so the page
+     works without CDN access. Update with:
+     curl -o livekit-client.umd.js https://cdn.jsdelivr.net/npm/livekit-client@<ver>/dist/livekit-client.umd.js -->
+<script src="./livekit-client.umd.js"></script>
+<script>
+  const statusEl = document.getElementById('status');
+  const connectBtn = document.getElementById('connect');
+  const disconnectBtn = document.getElementById('disconnect');
+  let room = null;
+
+  function log(msg) {
+    statusEl.textContent += (statusEl.textContent ? '\n' : '') +
+      new Date().toLocaleTimeString() + '  ' + msg;
+  }
+
+  async function api(path, options = {}) {
+    const opts = { credentials: 'same-origin', headers: {}, ...options };
+    if (opts.method && opts.method !== 'GET') opts.headers['X-VA-Request'] = '1';
+    if (opts.body) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(opts.body);
+    }
+    const response = await fetch(path, opts);
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(payload && payload.detail || ('HTTP ' + response.status));
+    return payload;
+  }
+
+  (async function init() {
+    document.getElementById('identity').value =
+      'web-' + Math.random().toString(36).slice(2, 6);
+    try {
+      const settings = await api('api/settings');
+      // room default comes from the console settings; URL from env display
+      const env = {};
+      settings.environment.forEach(e => { env[e.env_var] = e.value; });
+      document.getElementById('url').value = env.PUBLIC_LIVEKIT_WS_URL || env.LIVEKIT_URL || '';
+      const roomSetting = settings.settings.find(s => s.key === 'room_name');
+      if (roomSetting && roomSetting.value) {
+        document.getElementById('room').value = roomSetting.value;
+      }
+    } catch (err) {
+      log('note: could not pre-fill from console (' + err.message + ')');
+    }
+  })();
+
+  connectBtn.addEventListener('click', async () => {
+    const url = document.getElementById('url').value.trim();
+    const roomName = document.getElementById('room').value.trim() || 'home';
+    let token = document.getElementById('token').value.trim();
+    if (!url) { log('ERROR: url is required'); return; }
+    try {
+      if (!token) {
+        log('minting token via console ...');
+        const minted = await api('api/tokens/mint', {
+          method: 'POST',
+          body: {
+            identity: document.getElementById('identity').value.trim() || 'web-1',
+            room: roomName,
+          },
+        });
+        token = minted.token;
+        log('token minted for identity ' + minted.identity);
+      }
+      room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
+
+      room.on('participantConnected', p => log('participant connected: ' + p.identity));
+      room.on('participantDisconnected', p => log('participant left: ' + p.identity));
+      room.on('trackSubscribed', (track, pub, participant) => {
+        log('subscribed to ' + track.kind + ' from ' + participant.identity);
+        if (track.kind === 'audio') {
+          track.attach(document.getElementById('remote-audio'));
+        }
+      });
+      room.on('disconnected', () => log('disconnected'));
+      room.on('dataReceived', (payload) => {
+        log('event: ' + new TextDecoder().decode(payload));
+      });
+
+      log('connecting to ' + url + ' ...');
+      await room.connect(url, token);
+      log('connected to room: ' + room.name);
+
+      await room.localParticipant.setMicrophoneEnabled(true);
+      log('microphone live - start talking');
+      connectBtn.disabled = true;
+      disconnectBtn.disabled = false;
+    } catch (err) {
+      log('ERROR: ' + err.message);
+    }
+  });
+
+  disconnectBtn.addEventListener('click', async () => {
+    if (room) { await room.disconnect(); room = null; }
+    connectBtn.disabled = false;
+    disconnectBtn.disabled = true;
+    log('session ended');
+  });
+</script>
+</body>
+</html>

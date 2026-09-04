@@ -52,10 +52,17 @@ docker compose logs -f agent
 
 ```bash
 curl http://localhost:7880/                       # -> OK  (LiveKit)
+curl http://localhost:8090/healthz                # -> {"ok":true...} (console)
 make smoke                                        # or:
 docker compose --profile smoke build smoke
 docker compose --profile smoke run --rm smoke     # full audio round trip
 ```
+
+Sign in to the **web console** at `http://<host-ip>:8090` — default login is
+`UI_EMAIL` / `UI_PASSWORD` from `.env` (if `UI_PASSWORD` is empty, a one-off
+password was printed to `docker compose logs console` on first start). The
+dashboard shows LiveKit/agent/MCP connectivity, and every interaction lands
+in the audit trail.
 
 The smoke test joins a room, verifies the agent auto-dispatches, and asserts
 non-silent agent audio comes back (the greeting). Exit code 0 = PASS.
@@ -68,8 +75,9 @@ green once `ELEVEN_API_KEY` is set.
 ```bash
 # device token (see docs/esp32-xvf3800.md for firmware)
 python3 scripts/mint_token.py --identity respeaker-1 --room home
+# ...or mint tokens in the console: Devices tab -> "Mint a device token"
 
-# browser: docker compose --profile web up -d webtest  ->  http://localhost:8080
+# browser: console Talk tab -> http://<host-ip>:8090/talk
 ```
 
 ## Public access (optional, `tls` profile)
@@ -82,10 +90,12 @@ For access from outside the LAN:
 3. `docker compose --profile tls up -d caddy` — Caddy terminates wss/https
    with automatic Let's Encrypt certificates and proxies to LiveKit.
 4. Devices/browsers connect with `wss://voice.example.com` + tokens.
-5. Enable TURN in `livekit/livekit.yaml` (uncomment `turn:` and set a domain +
+5. The console is reachable at `https://voice.example.com/console` (set
+   `UI_ROOT_PATH=/console` in `.env`; the cookie is sent with `Secure`).
+6. Enable TURN in `livekit/livekit.yaml` (uncomment `turn:` and set a domain +
    secret, or run coturn) so media can relay through restrictive NATs — see
    https://docs.livekit.io/home/self-hosting/turn-server/
-6. Keep `.env` out of backups/vaults; rotate `LIVEKIT_API_SECRET` if leaked
+7. Keep `.env` out of backups/vaults; rotate `LIVEKIT_API_SECRET` if leaked
    (restart the stack afterwards).
 
 ## Bridge networking (non-Linux hosts / advanced)

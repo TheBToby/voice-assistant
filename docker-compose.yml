@@ -2,9 +2,9 @@
 # Self-hosted AI voice assistant stack
 #   livekit      - WebRTC media server (self-hosted LiveKit)
 #   agent        - LiveKit Agents voice pipeline (ElevenLabs STT/TTS, OpenAI
-#                  LLM, MCP tools: Home Assistant + your MCP servers via
-#                  MCP_SERVERS_JSON)
-#   webtest      - static browser test client (for laptop smoke testing)
+#                  LLM, MCP tools: Home Assistant + your MCP servers)
+#   console      - web console: configuration & diagnostics UI (default port
+#                  8090), SSO (OIDC) or password login, audit log
 #
 # Profiles:
 #   smoke -> one-shot end-to-end smoke test container
@@ -14,10 +14,11 @@
 #   * Linux host networking is used so WebRTC host candidates work on a LAN
 #     without STUN/TURN. On macOS/Windows or for bridge networking see
 #     docs/deployment.md.
-#   * All configuration comes from .env (see .env.example).
-#   * Persistent data (model cache, Caddy certificates/config) defaults to
-#     named Docker volumes; set MODEL_CACHE_DIR, CADDY_DATA_DIR and
-#     CADDY_CONFIG_DIR in .env to bind-mount specific host folders instead.
+#   * All configuration comes from .env (see .env.example). Non-fundamental
+#     settings can also be changed live in the console UI.
+#   * Persistent data (model cache, console DB, Caddy certificates/config)
+#     defaults to named Docker volumes; set MODEL_CACHE_DIR, CONSOLE_DATA_DIR,
+#     CADDY_DATA_DIR and CADDY_CONFIG_DIR in .env to bind-mount host folders.
 # ============================================================================
 name: voice-assistant
 
@@ -73,14 +74,41 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  webtest:
-    image: nginx:1.27-alpine
+  console:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
     restart: unless-stopped
-    ports:
-      - "${WEB_TEST_PORT:-8080}:80"
+    network_mode: host
+    env_file: .env
+    environment:
+      UI_PORT: ${UI_PORT:-8090}
+      UI_EMAIL: ${UI_EMAIL:-}
+      UI_PASSWORD: ${UI_PASSWORD:-}
+      UI_SECRET_KEY: ${UI_SECRET_KEY:-}
+      UI_LOCAL_AUTH: ${UI_LOCAL_AUTH:-auto}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URL: ${OIDC_REDIRECT_URL:-}
+      OIDC_SCOPES: ${OIDC_SCOPES:-}
+      OIDC_ALLOWED_EMAILS: ${OIDC_ALLOWED_EMAILS:-}
+      OIDC_ALLOWED_DOMAINS: ${OIDC_ALLOWED_DOMAINS:-}
+      DIAGNOSTICS_HISTORY_DAYS: ${DIAGNOSTICS_HISTORY_DAYS:-30}
+      TRANSCRIPTS_ENABLED: ${TRANSCRIPTS_ENABLED:-false}
+      ROOM_NAME: ${ROOM_NAME:-home}
+      TOKEN_VALID_HOURS: ${TOKEN_VALID_HOURS:-12}
+      TZ: ${TZ:-Etc/UTC}
     volumes:
-      - ./tests/web:/usr/share/nginx/html:ro
-    profiles: ["web"]
+      # console DB (settings overrides, devices, audit log) = persistent data
+      - ${CONSOLE_DATA_DIR:-console-data}:/data
+    depends_on:
+      - livekit
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # One-shot end-to-end smoke test:
   #   docker compose --profile smoke run --rm smoke
@@ -128,5 +156,6 @@ services:
 
 volumes:
   model-cache:
+  console-data:
   caddy_data:
   caddy_config:

@@ -14,6 +14,7 @@ import logging
 
 from livekit.agents import Agent, RunContext, function_tool, mcp
 
+import audit as audit_module
 from clock import now_text
 from config import AgentSettings
 from i18n import Localizer
@@ -29,6 +30,7 @@ class Assistant(Agent):
         mcp_toolsets: list[mcp.MCPToolset],
         timers: TimerService | None = None,
         localizer: Localizer | None = None,
+        audit: "audit_module.AuditReporter | None" = None,
     ) -> None:
         super().__init__(
             instructions=settings.instructions,
@@ -37,6 +39,7 @@ class Assistant(Agent):
         self.settings = settings
         self.t = localizer or Localizer(settings.language)
         self.timers = timers or TimerService()
+        self.audit = audit
         self._session = None  # bound by the entrypoint once the session exists
 
     def bind_session(self, session) -> None:  # noqa: ANN001 - AgentSession
@@ -126,6 +129,8 @@ class Assistant(Agent):
     async def _announce_timer_expired(self, record: TimerRecord) -> None:
         """Speak the expiry announcement and notify room participants."""
         text = self.t.message("timer_expired", name=record.name.capitalize())
+        if self.audit is not None:
+            self.audit.event("timer.expired", name=record.name)
         if self._session is not None:
             await self._session.say(text)
         await self._publish_event("timer.expired", {"name": record.name})

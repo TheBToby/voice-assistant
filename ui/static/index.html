@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Voice Assistant - Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="static/style.css" />
+</head>
+<body>
+
+<!-- ============================== login ============================== -->
+<div id="login-view" class="overlay hidden">
+  <div class="login-card">
+    <h1>Voice Assistant</h1>
+    <p class="hint">Configuration &amp; diagnostics console</p>
+    <div id="login-setup-warning" class="warning hidden">
+      No authentication is configured. Set <code>UI_EMAIL</code> /
+      <code>UI_PASSWORD</code> (or <code>OIDC_*</code>) in your <code>.env</code>.
+      A temporary password was printed to the console container log on first
+      start.
+    </div>
+    <form id="login-form">
+      <label>Email
+        <input id="login-email" type="email" autocomplete="username" />
+      </label>
+      <label>Password
+        <input id="login-password" type="password" autocomplete="current-password" />
+      </label>
+      <button type="submit" id="login-submit">Sign in</button>
+      <div id="login-error" class="error hidden"></div>
+      <div class="divider">or</div>
+      <a id="login-oidc" class="button secondary hidden" href="auth/oidc/login">Sign in with SSO (OIDC)</a>
+    </form>
+  </div>
+</div>
+
+<!-- ============================== app =============================== -->
+<div id="app-view" class="hidden">
+  <header>
+    <div class="brand">
+      <span class="logo">&#9679;</span> Voice Assistant Console
+    </div>
+    <nav id="tabs">
+      <a href="#dashboard" data-tab="dashboard">Dashboard</a>
+      <a href="#devices" data-tab="devices">Devices</a>
+      <a href="#mcp" data-tab="mcp">MCP Servers</a>
+      <a href="#settings" data-tab="settings">Settings</a>
+      <a href="#audit" data-tab="audit">Audit Log</a>
+      <a href="/talk" data-tab="talk">Talk &#8599;</a>
+    </nav>
+    <div class="user">
+      <span id="who"></span>
+      <button id="logout" class="ghost">Log out</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- dashboard -->
+    <section id="tab-dashboard" class="tab">
+      <div class="cards" id="status-cards"></div>
+      <div class="panel">
+        <h2>MCP servers</h2>
+        <div id="status-mcp" class="table-holder"></div>
+      </div>
+      <div class="panel">
+        <h2>Providers</h2>
+        <div id="status-providers" class="table-holder"></div>
+      </div>
+    </section>
+
+    <!-- devices -->
+    <section id="tab-devices" class="tab hidden">
+      <div class="panel">
+        <div class="row-between">
+          <h2>Known devices</h2>
+          <div>
+            <input id="device-new-identity" placeholder="identity (e.g. respeaker-1)" />
+            <input id="device-new-name" placeholder="friendly name" />
+            <button id="device-add">Add / rename</button>
+          </div>
+        </div>
+        <div id="devices-table" class="table-holder"></div>
+        <p class="hint">
+          Devices appear automatically when they connect to the assistant.
+          Online state comes from the LiveKit server. Mint device tokens here
+          or with <code>make token ID=&lt;identity&gt;</code>.
+        </p>
+        <div class="panel inner">
+          <h3>Mint a device token</h3>
+          <div>
+            <input id="token-identity" placeholder="identity" />
+            <input id="token-room" placeholder="room (default from settings)" />
+            <button id="token-mint">Mint token</button>
+          </div>
+          <pre id="token-output" class="mono hidden"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- mcp servers -->
+    <section id="tab-mcp" class="tab hidden">
+      <div class="panel">
+        <div class="row-between">
+          <h2>MCP servers</h2>
+          <div>
+            <button id="mcp-add">+ Add server</button>
+            <button id="mcp-save">Save MCP servers</button>
+          </div>
+        </div>
+        <p class="hint">
+          Tools from these servers are offered to the assistant. Changes apply
+          to newly started sessions. Entries from <code>MCP_SERVERS_JSON</code>
+          (env) and Home Assistant are shown read-only; add a UI entry with the
+          same ID to override them.
+        </p>
+        <div id="mcp-list"></div>
+      </div>
+    </section>
+
+    <!-- settings -->
+    <section id="tab-settings" class="tab hidden">
+      <form id="settings-form"></form>
+      <div class="panel">
+        <h2>Fundamental settings (environment only)</h2>
+        <p class="hint">
+          One-time basic settings stay in <code>.env</code> - they are shown
+          read-only. Restart the stack after changing them.
+        </p>
+        <div id="env-settings" class="table-holder"></div>
+      </div>
+    </section>
+
+    <!-- audit -->
+    <section id="tab-audit" class="tab hidden">
+      <div class="panel">
+        <div class="row-between">
+          <h2>Audit trail</h2>
+          <div>
+            <select id="audit-type">
+              <option value="">all events</option>
+            </select>
+            <input id="audit-search" placeholder="search data…" />
+            <button id="audit-refresh">Refresh</button>
+            <a class="button secondary" id="audit-export" href="/api/events/export?format=csv">Export CSV</a>
+            <button id="audit-clear" class="danger">Clear all</button>
+          </div>
+        </div>
+        <p class="hint" id="audit-retention"></p>
+        <div id="audit-table" class="table-holder"></div>
+        <button id="audit-more" class="ghost hidden">Load more…</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span id="foot-note">Voice Assistant Console</span>
+  </footer>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="static/app.js"></script>
+</body>
+</html>

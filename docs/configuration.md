@@ -1,8 +1,15 @@
 # Configuration guide
 
-All configuration lives in `.env` (see `.env.example` for the annotated list).
+Configuration starts in `.env` (see `.env.example` for the annotated list).
 The agent reads it via `env_file` in docker-compose; changing values requires
 `docker compose up -d --force-recreate agent` (or `make restart-agent`).
+
+**Most settings no longer need a restart**: the web console
+(`docs/console.md`) lets you change all non-fundamental settings at runtime
+(persona, models, Home Assistant, MCP servers, diagnostics). Env values act
+as defaults; UI overrides are stored in the console database and win until
+cleared. Fundamental one-time settings (API keys, LiveKit secrets, console
+authentication) stay in `.env` and are displayed read-only in the console.
 
 ## Variables
 
@@ -73,6 +80,10 @@ and a warning is logged at agent start.
 | `HOME_ASSISTANT_TOKEN` | HA long-lived access token |
 | `MCP_SERVERS_JSON` | JSON list for any MCP server (e.g. weather), see below |
 
+> Both are also configurable at runtime in the console (**MCP Servers** tab
+> and **Settings → Integrations**) - env values act as defaults there. A
+> console entry with the same id overrides the env definition.
+
 ## Home Assistant setup
 
 1. Home Assistant → **Settings → Devices & services → Add Integration →
@@ -124,5 +135,5 @@ Two options:
 | 7880/tcp | LiveKit signaling (ws) |
 | 7881/tcp | LiveKit WebRTC TCP fallback |
 | 50000–50200/udp | LiveKit WebRTC media |
-| 8080/tcp | webtest client (profile `web`) |
+| 8090/tcp | web console (`UI_PORT`) |
 | 80/443/tcp | Caddy (profile `tls`) |

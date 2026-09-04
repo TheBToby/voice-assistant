@@ -10,7 +10,11 @@ A low-latency, fully self-hosted voice assistant in the style of an Amazon Echo:
 - **STT/TTS**: ElevenLabs (Scribe v2 realtime STT, Turbo v2.5 TTS)
 - **LLM**: OpenAI-compatible API (OpenAI by default; Ollama/vLLM/LM Studio work via `OPENAI_BASE_URL`)
 - **Skills & integrations**: MCP servers — Home Assistant (official MCP Server
-  integration) and any custom MCP server (e.g. weather) via a single env var
+  integration) and any custom MCP server (e.g. weather) — configurable at
+  runtime in the web console
+- **Web console**: configuration & diagnostics UI with SSO (OIDC) or
+  password login — runtime settings, MCP server management, device registry,
+  connectivity status and a configurable audit trail
 - **Built-in skills**: current time/date, Echo-style countdown timers (with
   spoken announcements), plus everything your MCP servers provide
 - **Multi-language**: replies, STT/TTS and built-in skills follow `LANGUAGE`
@@ -41,11 +45,20 @@ supported as proposed and implemented here. See `docs/architecture.md` for detai
 ├── .env.example              # all configuration (copy to .env)
 ├── livekit/livekit.yaml      # LiveKit server config (keys come from .env)
 ├── agent/                    # voice pipeline (LiveKit Agents)
-│   ├── main.py               # entrypoint (worker)
+│   ├── main.py               # entrypoint (worker; pulls runtime config,
+│   │                         #  reports audit events to the console)
 │   ├── assistant.py          # Agent + built-in skills (time, timers)
-│   ├── config.py             # env-driven config & MCP server registry
+│   ├── audit.py              # best-effort audit reporter → console
+│   ├── config.py             # env config + console runtime overrides
 │   ├── i18n.py               # localization (German default, English)
 │   ├── timers.py, clock.py   # pure-logic skill modules (unit tested)
+│   └── Dockerfile
+├── ui/                       # web console (configuration & diagnostics)
+│   ├── serve.py              # uvicorn launcher
+│   ├── app/                  # FastAPI app + pure logic modules (unit tested)
+│   ├── static/               # single-page UI (vanilla JS, no build step)
+│   │   └── talk/             # browser test client (Talk tab)
+│   ├── requirements.txt
 │   └── Dockerfile
 ├── firmware/                  # ESP32-side wake word (ESP-SR WakeNet) overlay
 │                              # for the voice_agent firmware (firmware/README.md)
@@ -53,11 +66,10 @@ supported as proposed and implemented here. See `docs/architecture.md` for detai
 │   ├── mint_token.py         # mint access tokens for devices/browsers
 │   └── smoke_test.py         # end-to-end smoke test (WebRTC round trip)
 ├── tests/
-│   ├── unit/                 # host-run unit tests (pytest)
-│   └── web/index.html        # browser test client (livekit-client)
+│   └── unit/                 # host-run unit tests (pytest, agent + console)
 ├── caddy/Caddyfile           # optional TLS proxy (profile "tls")
-└── docs/                     # architecture, deployment, configuration,
-                              # ESP32/XVF3800 firmware guide, testing guide
+└── docs/                     # architecture, console, deployment,
+                              # configuration, ESP32 guide, testing
 ```
 
 ## Quickstart (LAN deployment)
@@ -86,9 +98,10 @@ docker compose --profile smoke run --rm smoke
 Talk to it from any of:
 
 - **reSpeaker XVF3800** — flash the LiveKit firmware, see
-  `docs/esp32-xvf3800.md` (token: `make token ID=respeaker-1 ROOM=home`)
-- **Browser** — `docker compose --profile web up -d webtest`, open
-  `http://localhost:8080`, paste URL + token
+  `docs/esp32-xvf3800.md` (token: `make token ID=respeaker-1 ROOM=home`,
+  or mint tokens in the web console)
+- **Browser** — open the console at `http://localhost:8090`, sign in and use
+  the **Talk** tab (token is minted for you)
 - **Terminal** — run the agent locally in console mode (see `docs/testing.md`)
 
 Example things to say (with `LANGUAGE=de`, the default):
@@ -107,6 +120,7 @@ In English (`LANGUAGE=en`):
 | Doc | Content |
 |---|---|
 | `docs/architecture.md` | System design, data flow, latency budget, security model |
+| `docs/console.md` | Web console: login (SSO/password), settings, MCP servers, diagnostics, audit trail |
 | `docs/deployment.md` | Step-by-step deployment, TLS/public access, autostart, troubleshooting |
 | `docs/configuration.md` | Every env var, swapping LLM/providers, adding MCP servers & skills |
 | `docs/esp32-xvf3800.md` | Flashing the XVF3800/XIAO ESP32-S3 with the LiveKit client firmware + the wake-word overlay |

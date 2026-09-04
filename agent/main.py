@@ -12,6 +12,7 @@ immediately gets a voice assistant.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -21,8 +22,9 @@ from livekit.agents import AgentSession, JobContext, WorkerOptions, cli, mcp
 from livekit.plugins import openai, silero
 from livekit.plugins import elevenlabs
 
+import audit as audit_module
 from assistant import Assistant
-from config import AgentSettings
+from config import AgentSettings, apply_overrides
 from timers import TimerService
 
 logger = logging.getLogger("voice-assistant")
@@ -32,7 +34,8 @@ def build_mcp_toolsets(settings: AgentSettings) -> list[mcp.MCPToolset]:
     """Wrap every configured MCP server in an MCPToolset."""
     toolsets: list[mcp.MCPToolset] = []
     for spec in settings.mcp_servers():
-        logger.info("MCP server registered: %s -> %s", spec.id, spec.url)
+        source = "console" if spec in settings.extra_mcp_specs else "env"
+        logger.info("MCP server registered: %s -> %s (%s)", spec.id, spec.url, source)
         toolsets.append(
             mcp.MCPToolset(
                 id=spec.id,
@@ -40,6 +43,39 @@ def build_mcp_toolsets(settings: AgentSettings) -> list[mcp.MCPToolset]:
             )
         )
     return toolsets
+
+
+async def load_runtime_settings(base: AgentSettings) -> AgentSettings:
+    """Fetch effective settings from the web console (best effort).
+
+    The console merges its DB overrides with the env defaults, so settings
+    changed in the UI apply to the next session without a restart. When the
+    console is unreachable the env-only configuration is used.
+    """
+    if not base.console_url or not base.console_token:
+        return base
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(
+                f"{base.console_url}/internal/config",
+                headers={"Authorization": f"Bearer {base.console_token}"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except Exception:  # noqa: BLE001 - env config remains the fallback
+        logger.info(
+            "console not reachable at %s; using environment configuration",
+            base.console_url,
+        )
+        return base
+    settings = apply_overrides(base, payload)
+    logger.info(
+        "runtime configuration loaded from console (config version %s)",
+        payload.get("version", "?"),
+    )
+    return settings
 
 
 def build_session(settings: AgentSettings) -> AgentSession:
@@ -125,9 +161,11 @@ def _build_turn_detector(settings: AgentSettings):
 
 
 async def entrypoint(ctx: JobContext) -> None:
-    settings = AgentSettings.from_env()
-    for problem in settings.validate():
+    base_settings = AgentSettings.from_env(os.environ)
+    for problem in base_settings.validate():
         logger.warning("configuration: %s", problem)
+
+    settings = await load_runtime_settings(base_settings)
 
     logger.info(
         "assistant language: %s (%s)", settings.language, settings.language_name
@@ -135,10 +173,71 @@ async def entrypoint(ctx: JobContext) -> None:
     logger.info("joining room %s", ctx.room.name)
     await ctx.connect()
 
+    # ------------------------------------------------------------------
+    # diagnostics: audit reporter (best-effort, never blocks the pipeline)
+    # ------------------------------------------------------------------
+    reporter: audit_module.AuditReporter | None = None
+    if settings.audit_enabled and settings.console_url and settings.console_token:
+        reporter = audit_module.AuditReporter(
+            console_url=settings.console_url,
+            token=settings.console_token,
+        )
+        reporter.configure(
+            room=ctx.room.name,
+            agent_identity=ctx.room.local_participant.identity,
+            transcripts=settings.transcripts_enabled,
+        )
+        reporter.event("agent.ready")
+        for participant in ctx.room.remote_participants.values():
+            reporter.event(
+                "device.join",
+                identity=participant.identity,
+                name=participant.name,
+            )
+        reporter.start()
+
+        def _on_participant_connected(participant) -> None:  # noqa: ANN001
+            reporter.event(
+                "device.join",
+                identity=participant.identity,
+                name=participant.name,
+            )
+
+        def _on_participant_disconnected(participant) -> None:  # noqa: ANN001
+            reporter.event("device.leave", identity=participant.identity)
+
+        ctx.room.on("participant_connected", _on_participant_connected)
+        ctx.room.on("participant_disconnected", _on_participant_disconnected)
+
+    async def _report_session_ended() -> None:
+        if reporter is not None:
+            reporter.event("session.ended")
+            await reporter.aclose()
+
+    try:
+        ctx.add_shutdown_callback(_report_session_ended)
+    except AttributeError:  # older/newer livekit-agents API
+        logger.debug("add_shutdown_callback unavailable; ending events skipped")
+
+    # ------------------------------------------------------------------
     timers = TimerService()
     session = build_session(settings)
-    assistant = Assistant(settings, build_mcp_toolsets(settings), timers=timers)
+    assistant = Assistant(
+        settings, build_mcp_toolsets(settings), timers=timers, audit=reporter
+    )
     assistant.bind_session(session)
+
+    if reporter is not None:
+        reporter.event(
+            "session.started",
+            data={
+                "participants": [
+                    {"identity": p.identity, "name": p.name}
+                    for p in ctx.room.remote_participants.values()
+                ],
+            },
+        )
+        reporter.attach_session(session)
 
     await session.start(room=ctx.room, agent=assistant)
 

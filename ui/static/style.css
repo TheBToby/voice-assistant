@@ -1,0 +1,139 @@
+/* Voice Assistant Console - dark theme matching the original test client */
+:root {
+  color-scheme: dark;
+  --bg: #10151c; --panel: #0b1117; --border: #2d3b4a;
+  --text: #e6edf3; --muted: #9fb0c0; --accent: #1f7a4d;
+  --accent-2: #1d4ed8; --danger: #a13232; --warn: #b7791f; --ok: #2f9e63;
+}
+* { box-sizing: border-box; }
+body {
+  font-family: system-ui, sans-serif; background: var(--bg); color: var(--text);
+  margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+}
+h1 { font-size: 1.4rem; margin: .2rem 0; }
+h2 { font-size: 1.05rem; margin: 0 0 .8rem; }
+h3 { font-size: .95rem; margin: 0 0 .6rem; }
+a { color: #7ab8ff; }
+code, .mono { font-family: ui-monospace, monospace; font-size: .85em; }
+.hidden { display: none !important; }
+.hint { color: var(--muted); font-size: .85rem; }
+.error { color: #ff8f8f; font-size: .85rem; margin-top: .5rem; }
+.warning {
+  background: rgba(183,121,31,.15); border: 1px solid var(--warn);
+  padding: .6rem .8rem; border-radius: 8px; font-size: .85rem; margin: .8rem 0;
+}
+
+/* login */
+.overlay {
+  position: fixed; inset: 0; background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+}
+.login-card {
+  width: 340px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; padding: 1.5rem;
+}
+.login-card label { display: block; margin-top: .8rem; font-size: .85rem; color: var(--muted); }
+.divider { text-align: center; color: var(--muted); font-size: .8rem; margin: .8rem 0 0; }
+
+/* inputs & buttons */
+input, select, textarea {
+  width: 100%; padding: .5rem; margin-top: .25rem; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  font-family: inherit; font-size: .9rem;
+}
+input#device-new-identity, input#device-new-name, input#token-identity,
+input#token-room, input#audit-search, #audit-type {
+  width: auto; min-width: 10rem; margin: 0 0 0 .4rem;
+}
+button, .button {
+  display: inline-block; margin-top: .8rem; padding: .5rem 1rem; border: 0;
+  border-radius: 8px; background: var(--accent); color: #fff; font-size: .9rem;
+  cursor: pointer; text-decoration: none;
+}
+button.danger { background: var(--danger); }
+button.ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+button.secondary, .button.secondary { background: var(--accent-2); text-align: center; }
+button:disabled { opacity: .5; cursor: default; }
+/* header / nav */
+header {
+  display: flex; align-items: center; gap: 1.5rem; padding: .7rem 1.2rem;
+  background: var(--panel); border-bottom: 1px solid var(--border);
+}
+.brand { font-weight: 600; white-space: nowrap; }
+.brand .logo { color: var(--ok); }
+nav { display: flex; gap: .2rem; flex: 1; }
+nav a {
+  color: var(--muted); text-decoration: none; padding: .35rem .8rem;
+  border-radius: 8px; font-size: .92rem;
+}
+nav a.active, nav a:hover { background: rgba(255,255,255,.06); color: var(--text); }
+.user { display: flex; align-items: center; gap: .6rem; color: var(--muted); font-size: .88rem; }
+.user button { margin-top: 0; padding: .3rem .7rem; }
+
+main { flex: 1; max-width: 1100px; width: 100%; margin: 0 auto; padding: 1.2rem; }
+footer { color: var(--muted); font-size: .8rem; padding: .8rem 1.2rem; text-align: center; }
+
+/* panels & cards */
+.panel {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 1rem 1.2rem; margin-bottom: 1.2rem;
+}
+.panel.inner { margin-top: 1rem; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: .9rem 1rem;
+}
+.card .title { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+.card .value { font-size: 1.15rem; margin-top: .3rem; }
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.row-between h2 { margin: 0; }
+.row-between button, .row-between .button, .row-between input, .row-between select { margin-top: 0; }
+
+/* tables */
+.table-holder { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .88rem; }
+th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: .8rem; }
+tr:last-child td { border-bottom: 0; }
+.pill { display: inline-block; padding: .1rem .55rem; border-radius: 999px; font-size: .75rem; border: 1px solid var(--border); }
+.pill.ok { color: #7ee2a8; border-color: var(--ok); }
+.pill.bad { color: #ff9d9d; border-color: var(--danger); }
+.pill.warn { color: #ffd58a; border-color: var(--warn); }
+.pill.muted { color: var(--muted); }
+
+/* mcp editor + settings */
+.mcp-card {
+  border: 1px solid var(--border); border-radius: 10px; padding: .8rem 1rem;
+  margin-bottom: .8rem; background: rgba(255,255,255,.02);
+}
+.mcp-grid { display: grid; grid-template-columns: 10rem 1fr auto; gap: .5rem; align-items: center; }
+.mcp-grid label { font-size: .8rem; color: var(--muted); }
+.mcp-actions { display: flex; gap: .5rem; }
+.mcp-actions button { margin-top: 0; padding: .35rem .7rem; font-size: .82rem; }
+.tools-list { color: var(--muted); font-size: .8rem; margin-top: .4rem; }
+.setting { margin-bottom: .9rem; }
+.setting > label { display: block; font-size: .88rem; }
+.setting .desc { color: var(--muted); font-size: .78rem; margin-top: .15rem; }
+.setting .meta { color: var(--muted); font-size: .75rem; margin-left: .4rem; }
+.setting input[type=checkbox] { width: auto; }
+fieldset { border: 1px solid var(--border); border-radius: 10px; margin: 0 0 1rem; }
+legend { color: var(--muted); font-size: .85rem; padding: 0 .4rem; }
+#settings-save { margin: .5rem 0 1.2rem; }
+
+/* audit */
+#audit-table td { font-size: .84rem; }
+.evt-data { color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+
+/* toast */
+.toast {
+  position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%);
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: .6rem 1rem; font-size: .88rem; z-index: 50; max-width: 80vw;
+}
+.toast.error { border-color: var(--danger); color: #ff9d9d; }
+
+@media (max-width: 760px) {
+  header { flex-wrap: wrap; }
+  .mcp-grid { grid-template-columns: 1fr; }
+}
