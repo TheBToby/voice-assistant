@@ -44,9 +44,15 @@ void board_init()
 
     // Initialize codec board
     set_codec_board_type(CONFIG_LK_EXAMPLE_CODEC_BOARD_TYPE);
+    // XVF3800: the XMOS exposes 2-ch/32-bit STANDARD I2S at 16 kHz (Seeed's
+    // verified I2S sketches for this hardware). The stock example config
+    // (TDM, 4ch, 16-bit) is shaped for the Korvo's ES7210 mic array and
+    // yields silence here. Also note: the XMOS must run its I2S firmware
+    // (not the default USB firmware) - see the Seeed XVF3800 XIAO wiki.
     codec_init_cfg_t cfg = {
-        .in_mode = CODEC_I2S_MODE_TDM,
-        .in_use_tdm = true,
+        .in_mode = CODEC_I2S_MODE_STD,
+        .out_mode = CODEC_I2S_MODE_STD,
+        .in_use_tdm = false,
         .reuse_dev = false
     };
     init_codec(&cfg);
