@@ -29,7 +29,8 @@ Behavior (Echo-like, **connected standby**):
 | `main/wake_word_engine_esp_sr.c` | ESP-SR WakeNet engine (standalone `detect()` on the AEC source's processed frames) |
 | `main/wake_word.h` / `main/wake_word.c` | State machine (armed/active), pre-wake buffer, chime task, weak LED hooks |
 | `main/media.c` | Example `media.c` with a gating wrapper around the `esp_capture` AEC audio source |
-| `main/board.c` | Example `board.c` patched for the XVF3800: skips the Korvo-2 BSP init (`bsp_i2c_init`/`bsp_leds_init`) that asserts on this board (§3.2 of the setup guide) |
+| `main/board.c` | Example `board.c` patched for the XVF3800: skips the Korvo-2 BSP init (`bsp_i2c_init`/`bsp_leds_init`) that asserts on this board (§3.2 of the setup guide), and configures standard I2S for the XMOS capture/playback path |
+| `main/main.c` | Example `main.c` with Wi-Fi tuning: modem power save off (`WIFI_PS_NONE`) and TX power capped to 8.5 dBm for stable, low-latency audio |
 | `main/CMakeLists.txt`, `main/Kconfig.projbuild` | Example files extended with the wake word sources and the "Wake Word" menu |
 | `partitions.csv` | Example partition table + esp-sr `model` partition, app grown to 4 MB (8 MB flash) |
 | `sdkconfig.defaults.wakeword` | 8 MB flash, model-in-flash, default model, gating tuning |
@@ -53,8 +54,8 @@ the ESP-IDF 5.4/5.5 environment active (not 6.x — see `docs/esp32-xvf3800.md`
 ```bash
 cd voice_agent
 VA=/opt/src/voice-assistant   # path of the voice-assistant repo on your machine
-# overlay sources + project files (replaces media.c, board.c, CMakeLists.txt,
-# Kconfig.projbuild and partitions.csv; adds wake_word.*)
+# overlay sources + project files (replaces media.c, board.c, main.c,
+# CMakeLists.txt, Kconfig.projbuild and partitions.csv; adds wake_word.*)
 cp -r "$VA/firmware/main/." main/
 cp "$VA/firmware/partitions.csv" .
 cat "$VA/firmware/sdkconfig.defaults.wakeword" >> sdkconfig.defaults

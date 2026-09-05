@@ -26,3 +26,7 @@ CONFIG_WAKE_WORD_DET_THRESHOLD=50
 # Console on USB Serial/JTAG: frees GPIO43/44 for the XMOS I2S data pins
 # (the default UART console occupies them on the XIAO ESP32-S3).
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Wi-Fi: disable modem power save - the default MIN_MODEM DTIM sleep adds
+# 100 ms+ latency bursts that break real-time audio.
+CONFIG_ESP_WIFI_POWER_SAVE_NONE=y
