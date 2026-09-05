@@ -131,4 +131,13 @@ menu "Wake Word"
         help
             Must match the playback stream configured by the codec board
             (the example renderer uses 2 channels at 16 kHz).
+
+    config MIC_LEVEL_TAP
+        bool "Log mic input levels once per second (diagnostics)"
+        default n
+        help
+            Prints RMS/min/max of the captured, AEC-processed mic frames once
+            per second. Independent of the wake word gate - enable it in
+            passthrough mode to verify the XMOS I2S capture path carries
+            non-silent audio.
 endmenu

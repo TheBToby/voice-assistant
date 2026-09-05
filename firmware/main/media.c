@@ -9,7 +9,9 @@
  *   - media_init() initializes the wake word module before the capture system.
  * Everything else is unchanged from the example.
  */
+#include <limits.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -59,6 +61,14 @@ typedef struct {
 static capture_system_t capturer_system;
 static renderer_system_t renderer_system;
 static ww_audio_src_t s_ww_audio_src;
+
+#if CONFIG_MIC_LEVEL_TAP
+/* One-per-second mic level report (XMOS I2S capture path diagnostics). */
+static int      s_tap_samples;
+static uint64_t s_tap_sum_sq;
+static int16_t  s_tap_min = INT16_MAX;
+static int16_t  s_tap_max = INT16_MIN;
+#endif
 
 static esp_capture_err_t ww_src_open(esp_capture_audio_src_if_t *h)
 {
@@ -191,6 +201,35 @@ static esp_capture_err_t ww_src_read_frame(esp_capture_audio_src_if_t *h,
         memcpy(dst + filled, s->scratch, need - filled);
         filled = need;
     }
+
+#if CONFIG_MIC_LEVEL_TAP
+    {
+        int16_t *pcm = (int16_t *)dst;
+        int samples = filled / (int)sizeof(int16_t);
+        for (int i = 0; i < samples; i++) {
+            int16_t v = pcm[i];
+            s_tap_sum_sq += (int64_t)v * v;
+            if (v < s_tap_min) {
+                s_tap_min = v;
+            }
+            if (v > s_tap_max) {
+                s_tap_max = v;
+            }
+        }
+        s_tap_samples += samples;
+        int rate = s->sample_rate ? (int)s->sample_rate : 16000;
+        if (s_tap_samples >= rate) {
+            int rms = (int)__builtin_sqrt(s_tap_sum_sq /
+                          (uint64_t)(s_tap_samples ? s_tap_samples : 1));
+            ESP_LOGI(TAG, "mic tap: %d ms rms=%d min=%d max=%d",
+                     s_tap_samples * 1000 / rate, rms, s_tap_min, s_tap_max);
+            s_tap_samples = 0;
+            s_tap_sum_sq = 0;
+            s_tap_min = INT16_MAX;
+            s_tap_max = INT16_MIN;
+        }
+    }
+#endif
 
     frame->pts = (uint32_t)(s->samples_out * 1000ULL /
                             (s->sample_rate ? s->sample_rate : 16000));
