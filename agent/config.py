@@ -7,11 +7,14 @@ without the heavy runtime (see tests/unit/test_config.py).
 from __future__ import annotations
 
 import json
+import logging
 import os
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 
 from i18n import DEFAULT_LANGUAGE, PACKS, normalize_language
 from i18n import language_name as human_language_name
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_SYSTEM_PROMPT = """\
 You are {name}, a friendly and efficient home voice assistant.
@@ -243,11 +246,13 @@ def _internal_token(env: dict) -> str:
     ).hexdigest()[:40]
 
 
-# settings the console may override, mapped 1:1 onto AgentSettings fields
+# settings the console may override; keys are the console's setting names
+# (ui/app/settings_core.py SETTING_DEFS), mapped onto AgentSettings fields
+# via _CONSOLE_KEY_ALIASES where the names differ
 _CONSOLE_SETTING_FIELDS: tuple[str, ...] = (
     "assistant_name",
     "language",
-    "assistant_instructions",
+    "assistant_instructions",  # console key; AgentSettings field: instructions
     "greeting",
     "default_location",
     "weather_units",
@@ -259,6 +264,11 @@ _CONSOLE_SETTING_FIELDS: tuple[str, ...] = (
     "home_assistant_url",
     "home_assistant_token",
 )
+
+# console setting key -> AgentSettings field, for keys whose names differ
+_CONSOLE_KEY_ALIASES: dict[str, str] = {
+    "assistant_instructions": "instructions",
+}
 
 
 def apply_overrides(base: AgentSettings, payload: dict) -> AgentSettings:
@@ -276,12 +286,19 @@ def apply_overrides(base: AgentSettings, payload: dict) -> AgentSettings:
 
     updates: dict[str, object] = {}
     for key in _CONSOLE_SETTING_FIELDS:
-        if values.get(key) is not None:
-            value = str(values[key])
-            if key == "language":
-                # console values arrive pre-normalized, but stay defensive
-                value = normalize_language(value)
-            updates[key] = value
+        value = values.get(key)
+        if value is None:
+            continue
+        name = _CONSOLE_KEY_ALIASES.get(key, key)
+        text = str(value)
+        if key == "language":
+            # console values arrive pre-normalized, but stay defensive
+            text = normalize_language(text)
+        if name == "instructions" and not text.strip():
+            # console "" = "use the built-in default prompt" - same semantics
+            # as an unset ASSISTANT_INSTRUCTIONS in from_env()
+            continue
+        updates[name] = text
     if values.get("enable_turn_detector") is not None:
         updates["enable_turn_detector"] = _to_bool(
             str(values["enable_turn_detector"])
@@ -306,6 +323,13 @@ def apply_overrides(base: AgentSettings, payload: dict) -> AgentSettings:
             continue
     if specs:
         updates["extra_mcp_specs"] = tuple(specs)
+
+    # safety net: a console key that does not match an AgentSettings field
+    # (ui/ and agent/ deployments drifting apart) must never crash the job
+    known_fields = {f.name for f in fields(base)}
+    for key in sorted(set(updates) - known_fields):
+        logger.warning("ignoring console setting %r: unknown agent field", key)
+        del updates[key]
 
     if not updates:
         return base

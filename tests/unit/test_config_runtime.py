@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agent"))
 
+import config
 from config import AgentSettings, _console_url, _internal_token, apply_overrides
 
 
@@ -112,3 +113,34 @@ def test_apply_overrides_tolerates_garbage():
     assert apply_overrides(base, "not-a-dict") is base
     assert apply_overrides(base, {}) is base
     assert apply_overrides(base, {"settings": "junk"}) is base
+
+
+def test_apply_overrides_maps_assistant_instructions_to_prompt():
+    """Regression: the console key is 'assistant_instructions' but the
+    AgentSettings field is 'instructions' - the override must land on the
+    field instead of raising TypeError (which crash-looped every job)."""
+    base = AgentSettings.from_env(base_env())
+    payload = {"settings": {"assistant_instructions": "You are a pirate."}}
+    settings = apply_overrides(base, payload)
+    assert settings.instructions == "You are a pirate."
+    # empty console value = "use the built-in default prompt" (from_env rule)
+    settings = apply_overrides(base, {"settings": {"assistant_instructions": ""}})
+    assert settings.instructions == base.instructions
+    assert "Atlas" in settings.instructions
+
+
+def test_apply_overrides_tolerates_console_key_drift(monkeypatch):
+    """An allowlisted console key without a matching AgentSettings field
+    (ui/ and agent/ deployments drifting apart) is dropped, not fatal."""
+    monkeypatch.setattr(
+        config,
+        "_CONSOLE_SETTING_FIELDS",
+        config._CONSOLE_SETTING_FIELDS + ("some_future_setting",),
+    )
+    base = AgentSettings.from_env(base_env())
+    payload = {
+        "settings": {"assistant_name": "Jarvis", "some_future_setting": "x"},
+    }
+    settings = apply_overrides(base, payload)
+    assert settings.assistant_name == "Jarvis"
+    assert settings.greeting == base.greeting
