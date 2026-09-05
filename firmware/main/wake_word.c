@@ -31,6 +31,19 @@
 #include "wake_word.h"
 #include "wake_word_engine.h"
 
+#if !CONFIG_WAKE_WORD_ENABLE
+/* The Kconfig symbols below depend on WAKE_WORD_ENABLE and don't exist when
+   it is disabled - define harmless fallbacks so the (unused) static helpers
+   in this file still compile. */
+#define CONFIG_WAKE_WORD_PRE_BUFFER_MS       0
+#define CONFIG_WAKE_WORD_FOLLOWUP_TIMEOUT_S  0
+#define CONFIG_WAKE_WORD_SPEECH_RMS_THRESHOLD 500
+#define CONFIG_WAKE_WORD_DET_THRESHOLD       50
+#define CONFIG_WAKE_WORD_CHIME_ENABLE        0
+#define CONFIG_WAKE_WORD_CHIME_RATE          16000
+#define CONFIG_WAKE_WORD_CHIME_CHANNELS      2
+#endif
+
 static const char *TAG = "wake_word";
 
 /* Input format the module is designed for (matches the Opus encode format of
