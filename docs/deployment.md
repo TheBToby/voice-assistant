@@ -106,6 +106,25 @@ Replace `network_mode: host` on `livekit` with explicit port mappings
 at the service name instead of `localhost`.
 Details: https://docs.livekit.io/home/self-hosting/deployment/
 
+## Docker inside LXC/VM (e.g. Proxmox) and clients in other subnets
+
+With the default `network_mode: host`, the containers bind directly on the
+LXC's network stack — there are **no Docker port mappings to open**. Devices
+in *other* subnets work as long as routing between the subnets exists and
+these ports reach the LXC from the device side:
+
+- `7880/tcp` — signaling WebSocket
+- `7881/tcp` — WebRTC TCP fallback (only used when UDP is blocked)
+- `50000-50200/udp` — media (ICE connectivity checks + SRTP)
+
+If the Proxmox/LXC firewall (the `pct` firewall option) is enabled, allow
+exactly those ports on the LXC. Routing must be **bidirectional** — the server
+also sends packets back to the device's ICE candidates. Optional tuning: set
+`NODE_IP=<LXC-LAN-IP>` in `.env` so the server only advertises the LAN
+candidate; by default it also advertises its docker bridges (172.17/172.18.x)
+and — with `rtc.enable_loopback_candidate: true`, used by the port-forward
+test flow — 127.0.0.1. Harmless, but ICE wastes a few checks on them.
+
 ## Autostart & operations
 
 - `restart: unless-stopped` keeps services alive across reboots (enable the

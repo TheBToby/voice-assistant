@@ -29,6 +29,7 @@ Behavior (Echo-like, **connected standby**):
 | `main/wake_word_engine_esp_sr.c` | ESP-SR WakeNet engine (standalone `detect()` on the AEC source's processed frames) |
 | `main/wake_word.h` / `main/wake_word.c` | State machine (armed/active), pre-wake buffer, chime task, weak LED hooks |
 | `main/media.c` | Example `media.c` with a gating wrapper around the `esp_capture` AEC audio source |
+| `main/board.c` | Example `board.c` patched for the XVF3800: skips the Korvo-2 BSP init (`bsp_i2c_init`/`bsp_leds_init`) that asserts on this board (§3.2 of the setup guide) |
 | `main/CMakeLists.txt`, `main/Kconfig.projbuild` | Example files extended with the wake word sources and the "Wake Word" menu |
 | `partitions.csv` | Example partition table + esp-sr `model` partition, app grown to 4 MB (8 MB flash) |
 | `sdkconfig.defaults.wakeword` | 8 MB flash, model-in-flash, default model, gating tuning |
@@ -46,19 +47,27 @@ capture open (`wake_word_on_capture_open/close` in `wake_word.c`).
 ## Apply the overlay
 
 From the `voice_agent/` project created in `docs/esp32-xvf3800.md` (§2), with
-the ESP-IDF 5.4+ environment active:
+the ESP-IDF 5.4/5.5 environment active (not 6.x — see `docs/esp32-xvf3800.md`
+§1):
 
 ```bash
 cd voice_agent
-# overlay sources + project files (replaces media.c, CMakeLists.txt,
+VA=/opt/src/voice-assistant   # path of the voice-assistant repo on your machine
+# overlay sources + project files (replaces media.c, board.c, CMakeLists.txt,
 # Kconfig.projbuild and partitions.csv; adds wake_word.*)
-cp -r /opt/src/voice-assistant/firmware/main/. main/
-cp /opt/src/voice-assistant/firmware/partitions.csv .
-cat /opt/src/voice-assistant/firmware/sdkconfig.defaults.wakeword >> sdkconfig.defaults
+cp -r "$VA/firmware/main/." main/
+cp "$VA/firmware/partitions.csv" .
+cat "$VA/firmware/sdkconfig.defaults.wakeword" >> sdkconfig.defaults
 rm -f sdkconfig   # pick up the new defaults cleanly
 idf.py set-target esp32s3
 idf.py menuconfig
 ```
+
+Note: the overlay was derived from the `0.3.2` example. If your `voice_agent`
+project was created from a newer release (check the pinned version in
+`main/idf_component.yml`), diff the replaced files (`media.c`,
+`CMakeLists.txt`, `Kconfig.projbuild`, `partitions.csv`) against your example
+first and re-apply the wake-word changes instead of blind-copying.
 
 In `menuconfig` re-apply the base settings from `docs/esp32-xvf3800.md` (§3):
 WiFi, `CONFIG_LK_EXAMPLE_USE_PREGENERATED` + server URL + token, and the
