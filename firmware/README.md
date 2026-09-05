@@ -60,6 +60,16 @@ cp "$VA/firmware/partitions.csv" .
 cat "$VA/firmware/sdkconfig.defaults.wakeword" >> sdkconfig.defaults
 rm -f sdkconfig   # pick up the new defaults cleanly
 idf.py set-target esp32s3
+# the XVF3800 entry from docs §3.1 must exist in board_cfg.txt (embedded at
+# build time; fresh managed_components/ drops it) - re-add if grep finds nothing:
+grep -A4 XVF3800 managed_components/tempotian__codec_board/board_cfg.txt || cat >> managed_components/tempotian__codec_board/board_cfg.txt <<'EOF'
+
+Board: XVF3800
+i2c: {sda: 5, scl: 6}
+i2s: {mclk: 9, bclk: 8, ws: 7, din: 43, dout: 44}
+out: {codec: DUMMY, use_mclk: 1}
+in: {codec: DUMMY}
+EOF
 idf.py menuconfig
 ```
 
