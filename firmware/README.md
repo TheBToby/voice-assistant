@@ -114,6 +114,7 @@ srmodels_bin)`).
 
 | Symptom | Knob |
 |---|---|
+| No wake word events at all, `ww feed:` peaks pinned at ±32768 every second | capture overdriven - set `CONFIG_AUDIO_INPUT_SHIFT` to 2 (or 3) and retest |
 | Device doesn't wake reliably | lower `WAKE_WORD_DET_THRESHOLD` (50 % default); check mic level |
 | False wakes | raise `WAKE_WORD_DET_THRESHOLD`; choose a longer/2-word phrase |
 | Wakes, then first words are cut off | raise `WAKE_WORD_PRE_BUFFER_MS` |
