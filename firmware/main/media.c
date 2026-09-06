@@ -244,7 +244,10 @@ static int build_capturer_system(void)
 
     esp_capture_audio_aec_src_cfg_t codec_cfg = {
         .record_handle = record_handle,
-        .channel = 4,
+        /* XVF3800: the XMOS delivers 2-ch/32-bit standard I2S - reading 4
+         * slots (Korvo/ES7210 heritage) yields half-wave/zeroed capture.
+         * The AEC source maps slot 0 -> mic, slot 1 -> playback reference. */
+        .channel = 2,
         .channel_mask = 1 | 2
     };
     s_ww_audio_src.inner = esp_capture_new_audio_aec_src(&codec_cfg);
