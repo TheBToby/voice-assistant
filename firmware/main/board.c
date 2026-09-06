@@ -19,6 +19,7 @@
 #include "codec_init.h"
 #include "codec_board.h"
 #include "driver/temperature_sensor.h"
+#include "driver/i2c_master.h"
 #include "bsp/esp-bsp.h"
 
 #include "board.h"
@@ -26,6 +27,59 @@
 static const char *TAG = "board";
 
 static temperature_sensor_handle_t temp_sensor = NULL;
+
+/*
+ * AIC3104 speaker codec init - ported from Seeed's Agora/TEN XIAO client
+ * (main/aic3104_ng.c + llm_main.c). The XVF3800 playback path is
+ * Host -> XVF3800 -> DAC (TLV320AIC3104), and the DAC outputs are muted at
+ * power-on: without this register setup the speaker stays silent. The
+ * registers live on page 0; the writes go over the codec_board I2C bus
+ * (SDA 5 / SCL 6, XMOS at 0x2C, AIC3104 at 0x18).
+ */
+#define AIC3104_I2C_ADDR 0x18
+
+static esp_err_t aic3104_speaker_init(void)
+{
+    i2c_master_bus_handle_t bus = (i2c_master_bus_handle_t)get_i2c_bus_handle(0);
+    if (bus == NULL) {
+        ESP_LOGW(TAG, "No I2C bus - AIC3104 speaker init skipped");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = AIC3104_I2C_ADDR,
+        .scl_speed_hz = 100000,
+    };
+    i2c_master_dev_handle_t dev = NULL;
+    esp_err_t err = i2c_new_master_device(bus, &dev);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "AIC3104 device create failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Seeed aic3104_ng_setup_default(): page 0, DAC gain 0 dB, HP/LO outputs
+     * unmuted (values from Seeed's working Agora client). */
+    static const uint8_t regs[][2] = {
+        { 0x00, 0x00 },  /* page control -> page 0       */
+        { 0x2B, 0x00 },  /* LEFT_DAC_VOLUME   0 dB       */
+        { 0x2C, 0x00 },  /* RIGHT_DAC_VOLUME  0 dB       */
+        { 0x33, 0x0D },  /* HPLOUT_LEVEL unmuted, 0xD    */
+        { 0x41, 0x0D },  /* HPROUT_LEVEL unmuted, 0xD    */
+        { 0x56, 0x0B },  /* LEFT_LOP_LEVEL unmuted, 0xB  */
+        { 0x5D, 0x0B },  /* RIGHT_LOP_LEVEL unmuted, 0xB */
+    };
+    for (int i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) {
+        uint8_t buf[2] = { regs[i][0], regs[i][1] };
+        err = i2c_master_transmit(dev, buf, sizeof(buf), 100);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "AIC3104 reg 0x%02X write failed: %s",
+                     regs[i][0], esp_err_to_name(err));
+        }
+    }
+    ESP_LOGI(TAG, "AIC3104 speaker codec initialized");
+    return ESP_OK;
+}
 
 void board_init()
 {
@@ -56,6 +110,10 @@ void board_init()
         .reuse_dev = false
     };
     init_codec(&cfg);
+
+    // AIC3104 speaker codec: unmute/enable the DAC outputs (Seeed Agora
+    // client port). Without it the speaker stays silent.
+    aic3104_speaker_init();
 }
 
 float board_get_temp(void)
