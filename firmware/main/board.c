@@ -52,7 +52,7 @@ static esp_err_t aic3104_speaker_init(void)
         .scl_speed_hz = 100000,
     };
     i2c_master_dev_handle_t dev = NULL;
-    esp_err_t err = i2c_new_master_device(bus, &dev);
+    esp_err_t err = i2c_master_bus_add_device(bus, &dev_cfg, &dev);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "AIC3104 device create failed: %s", esp_err_to_name(err));
         return err;
