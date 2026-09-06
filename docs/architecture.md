@@ -72,7 +72,7 @@ Key behaviors:
 | Layer | Choice | Notes |
 |---|---|---|
 | RTC transport | LiveKit Server v1.9 (self-hosted, host networking) | LAN-first; TURN for remote (docs) |
-| Device client | `livekit/client-sdk-esp32` (ESP32-S3) | `voice_agent` example as firmware base |
+| Device client | `livekit/client-sdk-esp32` v0.3.10 (ESP32-S3, vendored in `firmware/components/livekit`) | `minimal` example as firmware base, XVF3800 board bring-up ported from Seeed's Agora client |
 | Agent framework | LiveKit Agents 1.7 (Python) | replaces vocode-core (unmaintained, incompatible API, no MCP, no ElevenLabs STT) |
 | STT | ElevenLabs `scribe_v2_realtime` | streaming, 90+ languages |
 | TTS | ElevenLabs `eleven_turbo_v2_5` | streaming, voice id configurable |
@@ -142,45 +142,56 @@ Details and the API surface: `docs/console.md`.
 - For internet exposure use the `tls` profile (Caddy, wss://) **plus** TURN;
   rotate `LIVEKIT_API_SECRET` and keep it out of git (`.gitignore`).
 
-## Wake word
+## Device firmware
 
-Implemented as an **on-device wake word with connected standby** (overlay in
-`firmware/`, applied to the `voice_agent` firmware - see `firmware/README.md`
-and `docs/esp32-xvf3800.md` §6):
+`firmware/` is a self-contained ESP-IDF project for the reSpeaker XVF3800
+(XIAO ESP32-S3), based on the LiveKit SDK's `minimal` example with the
+XVF3800 board bring-up ported from Seeed's own XIAO client
+(`reference-projects/XVF3800-esp32-client-agora`):
 
 ```
                         ┌───────────────────── XIAO ESP32-S3 ─────────────────────┐
-XMOS XU316 ── I2S ──▶  │ esp_capture AEC source ──▶ gating wrapper               │
-(4-mic, AEC,  NS)      │   (mono 16 kHz PCM)        ├─▶ WakeNet detector (esp-sr) │
-                       │                            ├─▶ pre-wake ring buffer      │
-                       │                            └─▶ ARMED: silence → Opus     │
-                       │                                ACTIVE: buffer + live     │
-                       │ state: ARMED ──wake──▶ ACTIVE ──(10 s quiet)──▶ ARMED     │
-                       │ feedback: local chime + wake_word_led_* hooks             │
+XMOS XU316 ── I2S ──▶  │ capture: 16 kHz/2ch/32-bit wire format pinned            │
+(4-mic, AEC,  NS)      │   └─▶ capture sink: bits 32→16, ch 2→1 → Opus 16 kHz mono │
+         ◀── I2S ──    │ render: Opus → PCM → resample ch 1→2, bits 16→32         │
+ AIC3104 (speaker)     │   └─▶ I2S TX 16 kHz/2ch/32-bit                           │
+                       │ I2C (GPIO5/6): AIC3104 output unmute at boot             │
                        └───────────────────────────────────────────────────────────┘
 ```
 
-- **Room lifecycle unchanged**: the device joins at boot (agent greets once),
-  timer announcements and `assistant.event` data messages keep working. Only
-  the *audio leaving the device* is gated.
-- **On wake** the pre-wake buffer (default 1.5 s) is flushed ahead of the live
-  audio, so the wake phrase itself reaches the STT; a procedurally generated
-  chime plays locally; after a 10 s quiet window the gate re-arms.
-- **Engine seam is swappable** (`firmware/main/wake_word_engine.h`): ESP-SR
-  WakeNet ships as default; microWakeWord (TFLite-Micro) or livekit-wakeword
-  models (once LiveKit ships an ESP32 runtime) drop in without touching the
-  capture path. Stock models are English/Chinese; custom phrases (e.g. German)
-  need Espressif's WakeNet customization, a microWakeWord model, or the
-  livekit-wakeword route.
-- **Graceful degradation**: if the engine fails to init (no model partition,
-  format mismatch, OOM) the firmware falls back to always-listening.
+- **AEC/beamforming stay in the XMOS**: the ESP32 publishes the XMOS's
+  already-processed mic signal - no software AEC on the device.
+- **Format integrity**: the capture source pins its caps to the XMOS wire
+  format so the I2S bus is never reconfigured; all conversion to the Opus
+  track happens in the capture sink, all conversion back in the renderer.
+- **Vendored SDK** (`firmware/components/livekit`, v0.3.10): carries one
+  local fix - the signaling WebSocket buffer is raised 20 KB → 64 KB, which
+  otherwise breaks joining with an agent in the room (`JoinResponse`
+  fragmentation, upstream livekit/client-sdk-esp32#86).
+- Hardware details, build/flash steps and troubleshooting:
+  `firmware/README.md`.
 
-Alternatives considered (see the git history of this section for details):
+### Wake word (planned, not yet implemented)
+
+The current firmware publishes continuously (open mic). Planned: an
+**on-device wake word with connected standby** - the room stays joined, the
+published track is gated to silence until the wake phrase is heard (ESP-SR
+WakeNet on the ESP32-S3), pre-wake audio is flushed on wake, a local chime
+plays and an Echo-style follow-up window re-arms the gate. Only the *audio
+leaving the device* would be gated; room lifecycle, timer announcements and
+`assistant.event` data messages are unaffected. Stock WakeNet models are
+English/Chinese; custom phrases (e.g. German) need Espressif's WakeNet
+customization, a microWakeWord model, or LiveKit's
+[`livekit-wakeword`](https://github.com/livekit/livekit-wakeword) once its
+ESP32 runtime ships.
+
+Alternatives considered:
 
 | Option | Verdict |
 |---|---|
 | **A. Disconnected standby** (connect on wake, `hello-wakeword` style) | Max privacy, but +0.5-1.5 s wake latency (WebRTC connect + agent dispatch), re-triggers the greeting per session, and timer announcements would be missed while disconnected. |
-| **B. Connected standby (implemented)** | No added latency, greeting stays a boot event, timer events keep working, graceful degradation. |
+| **B. Connected standby (planned)** | No added latency, greeting stays a boot event, timer events keep working. |
 | **C. Agent-side transcript filter** | No firmware change, but all audio is always streamed to cloud STT (privacy/cost), and turn-taking still triggers. |
 | **D. Host-side gate** (e.g. [livekit/livekit-wakeword](https://github.com/livekit/livekit-wakeword) in the agent before STT) | Zero-firmware custom phrases (multilingual, Apache-2.0, 100× fewer false positives than vanilla openWakeWord), but chime/LED are triggered from the host (+50-250 ms, host dependency). Good stopgap; its models are the planned future on-device engine. |
+
 

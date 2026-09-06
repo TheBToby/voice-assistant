@@ -1,155 +1,128 @@
-# ESP32 wake word overlay (ESP-SR WakeNet, connected standby)
+# XVF3800 Firmware (LiveKit ESP32 client)
 
-This directory adds an **on-device wake word** to the `voice_agent` firmware
-from [livekit/client-sdk-esp32](https://github.com/livekit/client-sdk-esp32)
-(pinned `0.3.2`, see `docs/esp32-xvf3800.md` for the base setup).
+ESP-IDF firmware for the **Seeed Studio reSpeaker XVF3800** (XIAO ESP32-S3
+module) that connects the device as a voice-assistant endpoint to the
+self-hosted LiveKit server and its agent (see the repo root `README.md` for
+the docker stack).
 
-Behavior (Echo-like, **connected standby**):
+The firmware is intentionally minimal: WiFi + LiveKit room connection with
+**bidirectional audio** (publish microphone, play back the agent's replies).
+No wake word, no buttons - those are future work (see Roadmap).
 
-- The LiveKit room lifecycle is unchanged: the device joins at boot, the agent
-  greets once, timer announcements and `assistant.event` data messages keep
-  working.
-- While **armed**, the capture source publishes **digital silence**; audio is
-  fed to a WakeNet detector and kept in a ~1.5 s pre-wake ring buffer (PSRAM).
-  Nothing of substance leaves the device.
-- On detection: **local chime** (no cloud round trip), `wake_word_led_on_wake()`
-  UI hook, the pre-wake buffer is flushed ahead of the live audio (so the wake
-  phrase itself reaches the STT), and live audio flows.
-- After `CONFIG_WAKE_WORD_FOLLOWUP_TIMEOUT_S` (default 10 s) without speech the
-  module **re-arms** (Echo-style follow-up window).
-- If the engine fails to initialize (no model, no PSRAM, unexpected format) the
-  firmware degrades to the original always-listening behavior - never to a
-  broken device.
+## Layout
 
-## Files
-
-| File | Purpose |
-|---|---|
-| `main/wake_word_engine.h` | Engine-agnostic detection interface (swappable engine) |
-| `main/wake_word_engine_esp_sr.c` | ESP-SR WakeNet engine (standalone `detect()` on the AEC source's processed frames) |
-| `main/wake_word.h` / `main/wake_word.c` | State machine (armed/active), pre-wake buffer, chime task, weak LED hooks |
-| `main/media.c` | Example `media.c` with a gating wrapper around the `esp_capture` AEC audio source |
-| `main/board.c` | Example `board.c` patched for the XVF3800: skips the Korvo-2 BSP init (`bsp_i2c_init`/`bsp_leds_init`) that asserts on this board (§3.2 of the setup guide), and configures standard I2S for the XMOS capture/playback path |
-| `main/main.c` | Example `main.c` with Wi-Fi tuning: modem power save off (`WIFI_PS_NONE`) and TX power capped to 8.5 dBm for stable, low-latency audio |
-| `main/CMakeLists.txt`, `main/Kconfig.projbuild` | Example files extended with the wake word sources and the "Wake Word" menu |
-| `partitions.csv` | Example partition table + esp-sr `model` partition, app grown to 4 MB (8 MB flash) |
-| `sdkconfig.defaults.wakeword` | 8 MB flash, model-in-flash, default model, gating tuning |
-
-Note: esp-sr is **already a dependency** of the build - `espressif/esp_capture`
-(~0.7, pulled in by the LiveKit SDK) depends on `espressif/esp-sr` for its AEC
-audio source. No new component is added; we only enable a WakeNet model and
-run it on the already-AEC'd 16 kHz mono frames.
-
-Lifecycle note: the esp-capture AEC source frees the process-global esp-sr
-model list whenever the capture path closes (e.g. a LiveKit reconnect). The
-gating source therefore re-initializes the WakeNet model instance on every
-capture open (`wake_word_on_capture_open/close` in `wake_word.c`).
-
-## Apply the overlay
-
-From the `voice_agent/` project created in `docs/esp32-xvf3800.md` (§2), with
-the ESP-IDF 5.4/5.5 environment active (not 6.x — see `docs/esp32-xvf3800.md`
-§1):
-
-```bash
-cd voice_agent
-VA=/opt/src/voice-assistant   # path of the voice-assistant repo on your machine
-# overlay sources + project files (replaces media.c, board.c, main.c,
-# CMakeLists.txt, Kconfig.projbuild and partitions.csv; adds wake_word.*)
-cp -r "$VA/firmware/main/." main/
-cp "$VA/firmware/partitions.csv" .
-cat "$VA/firmware/sdkconfig.defaults.wakeword" >> sdkconfig.defaults
-rm -f sdkconfig   # pick up the new defaults cleanly
-idf.py set-target esp32s3
-# the XVF3800 entry from docs §3.1 must exist in board_cfg.txt (embedded at
-# build time; fresh managed_components/ drops it) - re-add if grep finds nothing:
-grep -A4 XVF3800 managed_components/tempotian__codec_board/board_cfg.txt || cat >> managed_components/tempotian__codec_board/board_cfg.txt <<'EOF'
-
-Board: XVF3800
-i2c: {sda: 5, scl: 6}
-i2s: {mclk: 9, bclk: 8, ws: 7, din: 43, dout: 44}
-out: {codec: DUMMY, use_mclk: 1}
-in: {codec: DUMMY}
-EOF
-idf.py menuconfig
+```
+firmware/
+├── CMakeLists.txt / partitions.csv / sdkconfig.defaults
+├── components/
+│   ├── livekit/          # vendored LiveKit ESP32 SDK v0.3.10 (+1 local fix,
+│   │                     #   see components/livekit/README.md)
+│   └── example_utils/    # vendored from the SDK: WiFi Kconfig + helper
+└── main/
+    ├── board.c           # XVF3800 hardware: I2S bridge, I2C, AIC3104, devices
+    ├── media.c           # capture (mic) + render (speaker) pipelines
+    ├── example.c         # LiveKit room connection
+    └── main.c            # app entrypoint
 ```
 
-Note: the overlay was derived from the `0.3.2` example. If your `voice_agent`
-project was created from a newer release (check the pinned version in
-`main/idf_component.yml`), diff the replaced files (`media.c`,
-`CMakeLists.txt`, `Kconfig.projbuild`, `partitions.csv`) against your example
-first and re-apply the wake-word changes instead of blind-copying.
+## Hardware bring-up facts
 
-In `menuconfig` re-apply the base settings from `docs/esp32-xvf3800.md` (§3):
-WiFi, `CONFIG_LK_EXAMPLE_USE_PREGENERATED` + server URL + token, and the
-`XVF3800` codec board entry (§3.1 - `managed_components/` board_cfg.txt is
-unaffected). The wake word settings live under **"Wake Word"**, the model
-under **"ESP Speech Recognition" → Load Multiple Wake Words** (default
-`wn9_hilexin`, "Hi Lexin"; keep only the models you use to save space).
+| Bus | Setting | Value |
+|---|---|---|
+| I2S (ESP32 = master, XMOS = slave) | format | standard I2S, 16 kHz, 32-bit slots, stereo, **no MCLK** |
+| | pins | BCLK=GPIO8, WS=GPIO7, DIN=GPIO43 (mics), DOUT=GPIO44 (speaker) |
+| I2C | bus | 100 kHz, SDA=GPIO5, SCL=GPIO6 |
+| | devices | 0x2C = XMOS XVF3800, 0x18 = AIC3104 speaker codec |
+
+Pin sources: XVF3800 schematic and Seeed's own XIAO ESP32-S3 client
+(`reference-projects/XVF3800-esp32-client-agora` in this repo). The AIC3104
+DAC powers up with muted outputs; `board.c` unmutes it over I2C at boot
+(register set ported from Seeed's working client) - without it the speaker
+stays silent.
+
+Two consequences of GPIO43/44 being wired to I2S:
+
+- **Console**: GPIO43/44 are also the ESP32-S3's default UART0 TX/RX. The
+  firmware routes the console to the USB Serial/JTAG controller
+  (`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`, already set) - logs come over the
+  same USB-C port, which then enumerates as `/dev/ttyACM0`.
+- **XMOS DSP firmware**: the XMOS must run its stock **I2S-capable** firmware
+  variant (the default ships USB-audio on some units). Check/flash it per
+  Seeed's reSpeaker XVF3800 wiki before debugging the ESP32 side.
+
+## Audio path (who converts what)
+
+```
+mics -> XMOS (beamforming + AEC, hardware) -> I2S RX 16 kHz/2ch/32-bit
+     -> capture sink: bit 32->16, channels 2->1      (auto-inserted)
+     -> Opus 16 kHz mono                              -> LiveKit room
+LiveKit room -> Opus 16 kHz mono -> decoder
+     -> renderer resampler: ch 1->2, bits 16->32
+     -> I2S TX 16 kHz/2ch/32-bit -> XMOS -> AIC3104 -> speaker
+```
+
+The XMOS does the acoustic echo cancellation in hardware, so the firmware
+uses the plain audio device source (`esp_capture_new_audio_dev_src`) - no
+software AEC. The capture source pins its caps to the XMOS wire format
+(16 kHz/2ch/32-bit) so the I2S bus is never reconfigured underneath it.
+
+## Prerequisites
+
+- ESP-IDF **>= 5.4** (upstream SDK requirement; tested by upstream with
+  v5.4/v5.5). First-time setup: https://docs.espressif.com/projects/esp-idf/
+- reSpeaker XVF3800 with the XIAO ESP32-S3 mounted, XMOS running the I2S
+  firmware variant (see above)
+- The docker stack from the repo root running (`docker compose up -d`)
 
 ## Build & flash
 
 ```bash
+cd firmware
+idf.py set-target esp32s3          # once per build directory
 idf.py build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
-`idf.py flash` also flashes `build/srmodels/srmodels.bin` into the `model`
-partition (handled by esp-sr's build script - `add_dependencies(flash
-srmodels_bin)`).
+WiFi credentials and the LiveKit server URL are preset in
+`sdkconfig.defaults` (edit there, or override via `idf.py menuconfig`).
+
+## Connect the device token
+
+Tokens are minted by the stack (room name is encoded in the token):
+
+```bash
+make token ID=respeaker-1 ROOM=home     # from the repo root
+```
+
+Then put the token into the firmware - either `idf.py menuconfig` →
+*LiveKit Example* → *Room access token*, or edit `CONFIG_LK_EXAMPLE_TOKEN=`
+in `sdkconfig.defaults` and rebuild. The device identity (`respeaker-1`)
+and room (`home`) are whatever you minted.
 
 ## Verify
 
-1. Boot log shows `wake_word: WakeNet 'wn9_hilexin' ready: phrase "Hi Lexin",
-   16000 Hz, chunk 512 samples` and `wake_word: Gating armed: ...`.
-2. While armed, the agent sees **no audible audio** (say anything without the
-   wake phrase: `docker compose logs -f agent` shows no turns being taken).
-3. Say the wake phrase: `wake_word: Wake word detected (... ms buffered), going
-   active`, local chime plays, and the utterance reaches the agent as one turn.
-4. After ~10 s without speech: `wake_word: Follow-up window elapsed,
-   re-arming`.
-5. The agent's own spoken replies (XMOS AEC path) must not wake the device.
+1. Serial log shows `Room state changed: CONNECTED` (and an IP from DHCP).
+2. `docker compose logs -f agent` shows the agent joining the device's room.
+3. Speak - the agent should answer through the speaker.
+4. The web console's *Talk* tab (browser client) can join the same room to
+   test the device end separately.
 
-## Tuning
+## Troubleshooting
 
-| Symptom | Knob |
+| Symptom | Fix |
 |---|---|
-| No wake word events at all, `ww feed:` peaks pinned at ±32768 every second | capture overdriven - set `CONFIG_AUDIO_INPUT_SHIFT` to 2 (or 3) and retest |
-| Device doesn't wake reliably | lower `WAKE_WORD_DET_THRESHOLD` (50 % default); check mic level |
-| False wakes | raise `WAKE_WORD_DET_THRESHOLD`; choose a longer/2-word phrase |
-| Wakes, then first words are cut off | raise `WAKE_WORD_PRE_BUFFER_MS` |
-| Re-arms mid-conversation | raise `WAKE_WORD_FOLLOWUP_TIMEOUT_S` / lower `WAKE_WORD_SPEECH_RMS_THRESHOLD` |
-| No chime | `WAKE_WORD_CHIME_RATE/CHANNELS` must match the playback stream (16 kHz/2 ch in the example) |
+| Boot loops / garbled log, no `/dev/ttyACM0` | console not on USB Serial/JTAG - keep `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`; use the XIAO's USB-C port |
+| `GPIO 44 and 43 are used as console UART I/O pins` warning | same fix - USB Serial/JTAG console frees the I2S data pins |
+| No mic audio in the room (agent sees silence), board logs clean | XMOS running the USB firmware variant - reflash the XMOS with the I2S firmware per the Seeed wiki |
+| Audio reaches the agent but is unintelligible / full-scale peaks | XMOS output overdriven - lower the mic level on the XMOS side (Seeed I2C Audio Manager, ResID 35 volume / AGC) |
+| `Failure reason: Join Incomplete`, `parent stream too short` | signaling fragmentation - mitigated by the vendored SDK's 64 KB buffer (`components/livekit/README.md`); raise `SIGNAL_WS_BUFFER_SIZE` if a much larger join payload reappears |
+| Agent never joins the device's room | token/room mismatch: mint with the same `ROOM=`; use `ws://<host-LAN-IP>:7880` (never `localhost`); check TCP 7880 + UDP 50000-60200 reachability |
+| Speaker silent, mic path fine | AIC3104 unmute didn't apply - check the boot log for `AIC3104 reg ... write failed` (I2C wiring / XMOS firmware variant) |
+| WiFi drops mid-conversation | real-time audio needs RSSI better than ~ -70 dBm; check the `rssi:` line in the boot log |
 
-Monitor CPU/heap with the SDK's task stats (`show_threads()`, see the SDK
-README) and `heap_caps_get_free_size` - WakeNet adds a few ms per 32 ms chunk
-inline in the capture path, and the esp-capture AEC source's internal esp-sr
-AFE may also run a wakenet when one is flashed (double detection cost is
-possible; measure and, if needed, disable `WAKE_WORD_ENABLE` or patch
-`managed_components/espressif__esp_capture*/.../capture_audio_aec_src.c` to
-set `afe_config->wakenet_init = false`).
+## Roadmap (not in this minimal firmware)
 
-## LED ring
-
-`wake_word_led_on_wake()` / `wake_word_led_on_idle()` are weak no-ops.
-Override them in `board.c` with the XVF3800 LED control to get the visual
-"listening" state (verify the LED wiring for your board revision against
-Seeed's wiki first). The agent-side `assistant.event` data messages (timers)
-remain available for richer animations.
-
-## Custom wake words (e.g. German)
-
-The stock WakeNet9 models are English/Chinese. Options, in order of effort:
-
-1. **Espressif WakeNet customization** - order a custom `wn9`/`wn9s` model for
-   your phrase via Espressif's wake-word customization service; flash it in
-   `srmodels.bin` (engine unchanged).
-2. **microWakeWord (TFLite Micro)** - open-source models, trainable for
-   arbitrary phrases; implement a small `wake_word_engine_*` behind
-   `wake_word_engine.h` (mel frontend + TFLite-Micro inference) - the capture
-   seam stays untouched.
-3. **livekit-wakeword** - LiveKit's open-source trainer produces
-   openWakeWord-compatible ONNX models (30+ languages incl. German, very low
-   false-positive rate) but has no ESP32 runtime yet; until then its models
-   can be converted to a TFLite-Micro engine like (2), or run host-side as an
-   alternative gating architecture (see `docs/architecture.md`).
+- On-device wake word (ESP-SR WakeNet) gating the published track
+- SET/MUTE buttons + LED ring via the XMOS I2C control port (0x2C)
+- XMOS-side mic gain / AGC tuning via the I2C Audio Manager (ResID 35/17)
+- Hardware watchdog for the media pipeline

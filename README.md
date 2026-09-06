@@ -60,8 +60,9 @@ supported as proposed and implemented here. See `docs/architecture.md` for detai
 │   │   └── talk/             # browser test client (Talk tab)
 │   ├── requirements.txt
 │   └── Dockerfile
-├── firmware/                  # ESP32-side wake word (ESP-SR WakeNet) overlay
-│                              # for the voice_agent firmware (firmware/README.md)
+├── firmware/                   # ESP32 firmware (XVF3800 + XIAO ESP32-S3):
+│                               # LiveKit client with bidirectional audio
+│                               # (firmware/README.md)
 ├── scripts/
 │   ├── mint_token.py         # mint access tokens for devices/browsers
 │   └── smoke_test.py         # end-to-end smoke test (WebRTC round trip)
@@ -69,7 +70,7 @@ supported as proposed and implemented here. See `docs/architecture.md` for detai
 │   └── unit/                 # host-run unit tests (pytest, agent + console)
 ├── caddy/Caddyfile           # optional TLS proxy (profile "tls")
 └── docs/                     # architecture, console, deployment,
-                              # configuration, ESP32 guide, testing
+                              # configuration, testing
 ```
 
 ## Quickstart (LAN deployment)
@@ -97,8 +98,8 @@ docker compose --profile smoke run --rm smoke
 
 Talk to it from any of:
 
-- **reSpeaker XVF3800** — flash the LiveKit firmware, see
-  `docs/esp32-xvf3800.md` (token: `make token ID=respeaker-1 ROOM=home`,
+- **reSpeaker XVF3800** — flash the firmware in `firmware/`, see
+  `firmware/README.md` (token: `make token ID=respeaker-1 ROOM=home`,
   or mint tokens in the web console)
 - **Browser** — open the console at `http://localhost:8090`, sign in and use
   the **Talk** tab (token is minted for you)
@@ -123,8 +124,7 @@ In English (`LANGUAGE=en`):
 | `docs/console.md` | Web console: login (SSO/password), settings, MCP servers, diagnostics, audit trail |
 | `docs/deployment.md` | Step-by-step deployment, TLS/public access, autostart, troubleshooting |
 | `docs/configuration.md` | Every env var, swapping LLM/providers, adding MCP servers & skills |
-| `docs/esp32-xvf3800.md` | Flashing the XVF3800/XIAO ESP32-S3 with the LiveKit client firmware + the wake-word overlay |
-| `firmware/README.md` | On-device wake word (ESP-SR WakeNet): overlay install, tuning, custom phrases |
+| `firmware/README.md` | XVF3800/XIAO ESP32-S3 firmware: hardware bring-up, build & flash, token setup, troubleshooting |
 | `docs/testing.md` | Unit tests, smoke test, browser client, console mode |
 
 ## Latency notes
@@ -143,15 +143,15 @@ end-of-speech to first audio out.
 
 ## Known limitations / roadmap
 
-- **On-device wake word (ESP-SR WakeNet)** — the reSpeaker gates its microphone
-  until the wake phrase is heard (connected standby: the room stays joined,
-  silence is published while armed, pre-wake audio is flushed on wake, local
-  chime + LED hooks, Echo-style follow-up window). Overlay lives in
-  `firmware/` — see `firmware/README.md` and `docs/esp32-xvf3800.md` §6.
+- **On-device wake word** — not yet implemented: the device currently streams
+  the (XMOS AEC-processed) microphone continuously, like an open mic.
+  Planned: ESP-SR WakeNet on the ESP32-S3 gating the published track
+  (connected standby: room stays joined, silence published while armed,
+  pre-wake buffer flushed on wake, local chime, Echo-style follow-up window).
   Stock models are English/Chinese; custom phrases (e.g. German) need
   Espressif's WakeNet customization, a microWakeWord model, or LiveKit's
   [`livekit-wakeword`](https://github.com/livekit/livekit-wakeword) once its
-  ESP32 runtime ships (the engine seam is swappable).
+  ESP32 runtime ships. See the roadmap in `firmware/README.md`.
 - The LiveKit ESP32 SDK is in **developer preview** (APIs may change).
 - Built-in skill replies (time, timers) are localized for German (default) and
   English; other `LANGUAGE` values fall back to English strings and VAD-only

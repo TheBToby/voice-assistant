@@ -1,0 +1,8 @@
+root_dir = "."
+exclude_path = ["docs/customization/*"]
+cache = true
+max_cache_age = "1d"
+exclude = [
+    "https://docs.livekit.io/mcp", # Returns 405
+    "https://livekit.io/join-slack" # Returns 403
+]

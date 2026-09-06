@@ -73,7 +73,7 @@ green once `ELEVEN_API_KEY` is set.
 ## 4. Connect clients
 
 ```bash
-# device token (see docs/esp32-xvf3800.md for firmware)
+# device token (flash the firmware in firmware/, see firmware/README.md)
 python3 scripts/mint_token.py --identity respeaker-1 --room home
 # ...or mint tokens in the console: Devices tab -> "Mint a device token"
 

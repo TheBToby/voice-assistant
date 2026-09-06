@@ -1,0 +1,12 @@
+dependencies:
+  idf: ">=5.4"
+  # Vendored copies of the SDK component and example utilities live in this
+  # project so local fixes (see components/livekit/README.md) survive
+  # dependency re-resolution. Both are Apache-2.0, upstream v0.3.10 / v0.2.0.
+  livekit/livekit:
+    override_path: ../components/livekit
+  livekit/example_utils:
+    override_path: ../components/example_utils
+  # Raw-I2S audio devices for the XVF3800's XMOS bridge (no I2C codec chip on
+  # the ESP32 side) - same dependency the SDK's custom_hardware example uses.
+  espressif/esp_codec_dev: "~1.4"

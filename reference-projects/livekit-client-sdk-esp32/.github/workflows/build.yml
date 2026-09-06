@@ -1,0 +1,26 @@
+name: Build
+on:
+  workflow_call: {}
+  workflow_dispatch: {}
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [esp32s3, esp32p4]
+        idf_version: [v5.4.4, v5.5.3]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { submodules: recursive }
+      - name: Build All
+        uses: espressif/esp-idf-ci-action@e6f5c74232b1ccd4c97ed641f1e48553853f1fd5 # v1.2.0
+        with:
+          esp_idf_version: ${{ matrix.idf_version }}
+          command: |
+            pip install idf-build-apps
+            idf-build-apps build --recursive --target ${{ matrix.target }}
