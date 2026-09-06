@@ -370,11 +370,11 @@ void wake_word_process_frame(int16_t *samples, int num_samples)
         ww_ring_push((const uint8_t *)samples, num_samples * (int)sizeof(int16_t));
 #if CONFIG_MIC_LEVEL_TAP
         {
-            int32_t acc = 0;
+            int64_t acc = 0;
             int peak = 0;
             for (int i = 0; i < num_samples; i++) {
-                int v = samples[i];
-                acc += (int32_t)v * v;
+                int64_t v = samples[i];
+                acc += v * v;
                 int a = v < 0 ? -v : v;
                 if (a > peak) {
                     peak = a;

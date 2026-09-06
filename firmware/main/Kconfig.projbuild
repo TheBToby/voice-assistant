@@ -57,6 +57,17 @@ menu "LiveKit Example"
         range 0 100
         help
             Default playback volume for speaker output.
+
+    config AUDIO_INPUT_SHIFT
+        int "Capture gain reduction: right-shift captured samples (bits)"
+        range 0 8
+        default 0
+        help
+            Right-shifts the captured, AEC-processed samples by this many
+            bits before wake-word detection and publish - each bit halves
+            the level. The XVF3800's XMOS output runs hot (peaks pinned at
+            full scale, which breaks WakeNet and STT); 2-3 bits typically
+            removes the clipping. 0 = no reduction.
 endmenu
 
 menu "Wake Word"

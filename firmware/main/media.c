@@ -199,6 +199,15 @@ static esp_capture_err_t ww_src_read_frame(esp_capture_audio_src_if_t *h,
         if (err != ESP_CAPTURE_ERR_OK) {
             return err;
         }
+#if CONFIG_AUDIO_INPUT_SHIFT > 0
+        /* De-clip: the XVF3800's XMOS output runs hot (peaks pinned at full
+         * scale). Right-shift reduces the level before gating/WakeNet/
+         * publish; each bit halves the level. */
+        int16_t *pcm = (int16_t *)s->scratch;
+        for (int i = 0; i < (need - filled) / 2; i++) {
+            pcm[i] = (int16_t)(pcm[i] >> CONFIG_AUDIO_INPUT_SHIFT);
+        }
+#endif
         /* 3. Wake word gating: zeroed while armed, live audio once awake.
          *    Detection runs inline (WakeNet needs a few ms per 32 ms chunk -
          *    far below real time on the ESP32-S3). */
