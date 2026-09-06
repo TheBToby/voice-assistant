@@ -76,11 +76,16 @@ static esp_capture_err_t ww_src_open(esp_capture_audio_src_if_t *h)
     if (s->inner == NULL) {
         return ESP_CAPTURE_ERR_INVALID_STATE;
     }
-    /* Re-arm the wake word engine first: the AEC source's close freed the
-     * process-global esp-sr model list, and its open below expects to find
-     * (or recreate) it. */
+    /* Open the inner AEC source first: its open (re)creates the esp-sr model
+     * list and AFE. The wake word engine is then (re)armed on top of the
+     * fresh models - re-arming before the open would leave it with a stale
+     * model instance that never detects. */
+    esp_capture_err_t err = s->inner->open(s->inner);
+    if (err != ESP_CAPTURE_ERR_OK) {
+        return err;
+    }
     wake_word_on_capture_open();
-    return s->inner->open(s->inner);
+    return ESP_CAPTURE_ERR_OK;
 }
 
 static esp_capture_err_t ww_src_get_support_codecs(esp_capture_audio_src_if_t *h,

@@ -77,6 +77,13 @@ typedef struct {
 static ww_ctx_t s_ctx;
 static bool s_engine_ready;   /*!< WakeNet model instance loaded */
 
+#if CONFIG_MIC_LEVEL_TAP
+/* Diagnostics: what the WakeNet engine is actually being fed. */
+static int      s_fed_samples;
+static uint64_t s_fed_sum_sq;
+static int      s_fed_peak;
+#endif
+
 static inline int ww_pre_buffer_bytes(void)
 {
     return CONFIG_WAKE_WORD_PRE_BUFFER_MS * WW_SAMPLE_RATE / 1000 * 2;
@@ -297,18 +304,20 @@ void wake_word_deinit(void)
 void wake_word_on_capture_open(void)
 {
 #if CONFIG_WAKE_WORD_ENABLE
-    if (!s_ctx.enabled || s_engine_ready) {
+    if (!s_ctx.enabled) {
         return;
     }
-    /* The esp-capture AEC source freed the process-global esp-sr model list
-     * when the capture path was closed - recreate the model instance. */
+    /* Always re-create the model instance here: the esp-capture AEC source's
+     * open builds its own AFE (with its own WakeNet) on top of the esp-sr
+     * model list, so an engine instance created earlier (e.g. at boot, before
+     * the AEC source even existed) would be stale and never detect. */
     wake_word_engine_cfg_t ecfg = {
         .sample_rate = WW_SAMPLE_RATE,
         .det_threshold = CONFIG_WAKE_WORD_DET_THRESHOLD / 100.0f,
     };
     s_engine_ready = (wake_word_engine_init(&ecfg) == ESP_OK);
     if (s_engine_ready) {
-        ESP_LOGI(TAG, "Wake word engine re-armed after capture (re)open");
+        ESP_LOGI(TAG, "Wake word engine (re)armed for this capture session");
     } else {
         ESP_LOGW(TAG, "Wake word engine re-init failed - passthrough mode");
         s_ctx.enabled = false;
@@ -359,19 +368,53 @@ void wake_word_process_frame(int16_t *samples, int num_samples)
         /* Keep the tail of the audio so the wake phrase itself can be
          * flushed to the pipeline (and therefore to STT) after waking. */
         ww_ring_push((const uint8_t *)samples, num_samples * (int)sizeof(int16_t));
-        if (wake_word_engine_feed(samples, num_samples)) {
-            ESP_LOGI(TAG, "Wake word detected (%d ms buffered), going active",
-                     s_ctx.ring_fill * 1000 / (WW_SAMPLE_RATE * 2));
-            wake_word_engine_reset();
-            ww_ring_to_pending();
-            s_ctx.state = WAKE_WORD_ACTIVE;
-            s_ctx.idle_us = 0;
-            wake_word_led_on_wake();
-#if CONFIG_WAKE_WORD_CHIME_ENABLE
-            if (s_ctx.chime_sem != NULL) {
-                xSemaphoreGive(s_ctx.chime_sem);
+#if CONFIG_MIC_LEVEL_TAP
+        {
+            int32_t acc = 0;
+            int peak = 0;
+            for (int i = 0; i < num_samples; i++) {
+                int v = samples[i];
+                acc += (int32_t)v * v;
+                int a = v < 0 ? -v : v;
+                if (a > peak) {
+                    peak = a;
+                }
             }
+            s_fed_samples += num_samples;
+            s_fed_sum_sq += acc;
+            if (peak > s_fed_peak) {
+                s_fed_peak = peak;
+            }
+            if (s_fed_samples >= WW_SAMPLE_RATE) {
+                int rms = (int)__builtin_sqrt(s_fed_sum_sq /
+                              (uint64_t)(s_fed_samples ? s_fed_samples : 1));
+                ESP_LOGI(TAG, "ww feed: %d ms rms=%d peak=%d (into WakeNet)",
+                         s_fed_samples * 1000 / WW_SAMPLE_RATE, rms, s_fed_peak);
+                s_fed_samples = 0;
+                s_fed_sum_sq = 0;
+                s_fed_peak = 0;
+            }
+        }
 #endif
+        {
+            bool detected = wake_word_engine_feed(samples, num_samples);
+            /* Publish digital silence while armed (privacy until the wake
+             * word) - see wake_word.h. */
+            memset(samples, 0, num_samples * sizeof(int16_t));
+            if (detected) {
+                ESP_LOGI(TAG, "Wake word detected (%d ms buffered), going active",
+                         s_ctx.ring_fill * 1000 / (WW_SAMPLE_RATE * 2));
+                wake_word_engine_reset();
+                ww_ring_to_pending();
+                s_ctx.state = WAKE_WORD_ACTIVE;
+                s_ctx.idle_us = 0;
+                wake_word_led_on_wake();
+#if CONFIG_WAKE_WORD_CHIME_ENABLE
+                if (s_ctx.chime_sem != NULL) {
+                    xSemaphoreGive(s_ctx.chime_sem);
+                }
+#endif
+            }
         }
         break;
 
