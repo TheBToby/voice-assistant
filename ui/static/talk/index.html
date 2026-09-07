@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <title>Voice Assistant - Talk (browser test client)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="stylesheet" href="../style.css" />
+<link rel="stylesheet" href="/static/style.css" />
 <style>
   body { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
   label { display: block; margin-top: 1rem; font-size: .9rem; color: var(--muted); }
@@ -15,7 +15,7 @@
 </style>
 </head>
 <body>
-<a class="back" href="../">&#8592; Back to console</a>
+<a class="back" href="/">&#8592; Back to console</a>
 <h1>Talk to the assistant</h1>
 <p class="hint">
   Joins the same LiveKit room as the reSpeaker XVF3800. A short-lived access
@@ -45,7 +45,7 @@
 <!-- LiveKit client SDK, vendored (pinned v2.22.2, UMD build) so the page
      works without CDN access. Update with:
      curl -o livekit-client.umd.js https://cdn.jsdelivr.net/npm/livekit-client@<ver>/dist/livekit-client.umd.js -->
-<script src="./livekit-client.umd.js"></script>
+<script src="/static/talk/livekit-client.umd.js"></script>
 <script>
   const statusEl = document.getElementById('status');
   const connectBtn = document.getElementById('connect');
