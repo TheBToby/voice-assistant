@@ -178,14 +178,35 @@ loaders.dashboard = async function () {
     .map((c) => `<div class="card"><div class="title">${c.title}</div><div class="value">${c.value}</div></div>`)
     .join("");
 
-  const mcpRows = status.mcp_servers.map((s) => `
+  const mcpRows = status.mcp_servers.map((s) => {
+    const meta = [
+      s.server_info && s.server_info.name
+        ? esc(s.server_info.name) + (s.server_info.version ? ` v${esc(s.server_info.version)}` : "")
+        : "",
+      s.protocol_version ? `MCP ${esc(s.protocol_version)}` : "",
+    ].filter(Boolean).join(" · ");
+    const metaHint = meta ? `<div class="hint">${meta}</div>` : "";
+    const errorHint = s.error ? `<div class="hint">${esc(s.error)}</div>` : "";
+    if (s.active === false) {
+      return `
     <tr>
       <td><strong>${esc(s.id)}</strong><div class="hint">${esc(s.source)}</div></td>
       <td class="mono">${esc(s.url)}</td>
-      <td>${s.ok ? pill(true, `${s.latency_ms} ms`) : pill(false, "fail")}
-        ${s.error ? `<div class="hint">${esc(s.error)}</div>` : ""}</td>
-      <td>${s.tools && s.tools.length ? esc(s.tools.join(", ")) : '<span class="hint">–</span>'}</td>
-    </tr>`);
+      <td><span class="pill muted">disabled</span></td>
+      <td><span class="hint">–</span></td>
+    </tr>`;
+    }
+    const tools = s.tools && s.tools.length
+      ? `${s.tools.length} tool${s.tools.length === 1 ? "" : "s"}<div class="hint">${esc(s.tools.join(", "))}</div>`
+      : '<span class="hint">–</span>';
+    return `
+    <tr>
+      <td><strong>${esc(s.id)}</strong><div class="hint">${esc(s.source)}</div></td>
+      <td class="mono">${esc(s.url)}</td>
+      <td>${s.ok ? pill(true, `${s.latency_ms} ms`) : pill(false, "fail")}${metaHint}${errorHint}</td>
+      <td>${tools}</td>
+    </tr>`;
+  });
   $("#status-mcp").innerHTML = mcpRows.length
     ? `<table><tr><th>Server</th><th>URL</th><th>Status</th><th>Tools</th></tr>${mcpRows.join("")}</table>`
     : '<p class="hint">No MCP servers configured - add some under "MCP Servers".</p>';
@@ -341,8 +362,15 @@ function wireMcpActions() {
           body: { url: uiServers[index].url, headers },
         });
         box.innerHTML = result.ok
-          ? `${pill(true, `ok · ${result.latency_ms} ms`)}${result.tools.length ? ` tools: ${esc(result.tools.join(", "))}` : ""}`
-          : `${pill(false, "ok", "failed")} ${esc(result.error)}`;
+          ? `${pill(true, `ok · ${result.latency_ms} ms`)} ` +
+            (result.server_info && result.server_info.name
+              ? `<span class="hint">${esc(result.server_info.name)}${result.server_info.version ? ` v${esc(result.server_info.version)}` : ""}${result.protocol_version ? ` · MCP ${esc(result.protocol_version)}` : ""}</span> `
+              : "") +
+            (result.tools && result.tools.length
+              ? `<div class="hint">${result.tools.length} tools: ${esc(result.tools.join(", "))}</div>`
+              : "") +
+            (result.error ? `<div class="hint">${esc(result.error)}</div>` : "")
+          : `${pill(false, "ok", "failed")} <div class="hint">${esc(result.error)}</div>`;
       } catch (err) { box.textContent = err.message; }
     };
     const remove = card.querySelector("[data-remove]");

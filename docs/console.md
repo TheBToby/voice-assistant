@@ -73,10 +73,18 @@ used to own, plus Home Assistant:
 
 - UI-managed entries can be added, edited, enabled/disabled and removed at
   runtime. **Test** performs a real MCP handshake (`initialize` +
-  `tools/list`) and shows the discovered tools and latency.
+  `tools/list`) and shows the discovered tools, latency, server name and
+  negotiated protocol version.
 - Entries from `MCP_SERVERS_JSON` (env) and the Home Assistant integration
   are listed read-only. A UI entry with the same id **overrides** them
   (first definition wins - the same rule the agent applies).
+
+> The console's probe speaks streamable HTTP (JSON and SSE responses,
+> offering all current MCP protocol versions) and falls back to the legacy
+> HTTP+SSE transport - the same transports the agent accepts. Auth headers
+> configured for a server are sent along, so servers like the Home
+> Assistant MCP integration (401 without a Bearer token) are diagnosed
+> correctly instead of showing up as failed.
 
 ## Diagnostics & audit trail
 
@@ -85,8 +93,10 @@ used to own, plus Home Assistant:
   name, first/last seen, session count). Online state comes live from the
   LiveKit server API. Known identities can be renamed or removed.
 - **Connectivity**: dashboard probes LiveKit (server API), the agent worker
-  (heartbeat events, max. 120 s age), each active MCP server (60 s result
-  cache) and checks provider key configuration.
+  (heartbeat events, max. 120 s age), each active MCP server - in parallel,
+  with the server's configured auth headers, 60 s result cache - and checks
+  provider key configuration. Disabled MCP servers are listed but not
+  probed.
 - **Audit trail** events: `session.started/ended`, `device.join/leave`,
   `user_input`, `agent_reply`, `tool.call` (built-in + MCP tools with
   arguments and errors), `timer.expired`, `agent.ready`, `agent.heartbeat`,

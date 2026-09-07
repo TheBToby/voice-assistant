@@ -407,12 +407,17 @@ def mask_secret(value: str) -> str:
 
 
 def merged_mcp_view(
-    ui_list: list[dict], env_list: list[dict], env: dict
+    ui_list: list[dict], env_list: list[dict], env: dict,
+    mask_secrets: bool = True,
 ) -> list[dict]:
     """Display merge for the UI (first definition per id wins, like the agent).
 
     Order: UI-managed entries, then MCP_SERVERS_JSON entries, then the Home
     Assistant integration. Shadowed entries are listed but flagged inactive.
+
+    With mask_secrets=True (display) header secrets become `xyz***`; the
+    status prober passes False to get the real headers - the values must
+    never be echoed back to the client though.
     """
     values = effective(env, {})
     ha_url = values.get("home_assistant_url", "")
@@ -421,12 +426,15 @@ def merged_mcp_view(
     view: list[dict] = []
     seen: set[str] = set()
 
+    def prepare(value: str) -> str:
+        return mask_secret(value) if mask_secrets else value
+
     def add(server_id: str, url: str, headers: dict, source: str, active: bool) -> None:
         view.append(
             {
                 "id": server_id,
                 "url": url,
-                "headers": {k: mask_secret(v) for k, v in headers.items()},
+                "headers": {k: prepare(v) for k, v in headers.items()},
                 "source": source,
                 "active": bool(active) and server_id not in seen,
             }

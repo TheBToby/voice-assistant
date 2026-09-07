@@ -96,7 +96,9 @@ class ConsoleState:
         self.auth_env = auth_env
 
         self.internal = internal_token(env)
-        self._mcp_probe_cache: dict[str, tuple[float, dict]] = {}
+        # key: (server id, url, headers fingerprint) so config changes
+        # invalidate the 60s result cache; value: (probed_at, result)
+        self._mcp_probe_cache: dict[tuple, tuple[float, dict]] = {}
 
     # ------------------------------------------------------------------
     def effective_settings(self) -> dict[str, str]:
@@ -370,6 +372,8 @@ def create_app() -> FastAPI:
                 },
             )
             state.db.bump_config_version()
+            # e.g. a new Home Assistant token: probe results are stale now
+            state._mcp_probe_cache.clear()
         return {
             "ok": True,
             "skipped": skipped,
@@ -412,6 +416,9 @@ def create_app() -> FastAPI:
             },
         )
         state.db.bump_config_version()
+        # MCP config changed: drop cached probe results so the dashboard
+        # reflects the new configuration on the next refresh
+        state._mcp_probe_cache.clear()
         return {
             "ok": True,
             "count": len(server_list),
@@ -508,24 +515,53 @@ def create_app() -> FastAPI:
             ("agent.heartbeat", "agent.ready", "session.started"), now
         )
         servers = []
-        for server in settings_core.merged_mcp_view(
+        # mask_secrets=False: the probe needs the real auth headers (Home
+        # Assistant's MCP integration answers 401 without them). The values
+        # are used for the request only - never echoed to the client.
+        merged = settings_core.merged_mcp_view(
             state.stored_mcp_list(),
             settings_core.env_mcp_servers(state.env),
             state.env,
-        ):
-            if not server["active"]:
-                continue
-            cached = state._mcp_probe_cache.get(server["id"])
+            mask_secrets=False,
+        )
+        disabled = {
+            "ok": None,  # not probed
+            "latency_ms": 0,
+            "tools": [],
+            "error": "",
+            "server_info": {},
+            "protocol_version": "",
+        }
+
+        async def probe_with_cache(server: dict) -> dict:
+            key = (
+                server["id"],
+                server["url"],
+                frozenset((server.get("headers") or {}).items()),
+            )
+            cached = state._mcp_probe_cache.get(key)
             if cached and now - cached[0] < 60:
-                result = cached[1]
-            else:
-                result = await probes.probe_mcp(server["url"])
-                state._mcp_probe_cache[server["id"]] = (now, result)
+                return cached[1]
+            result = await probes.probe_mcp(
+                server["url"], server.get("headers") or {}
+            )
+            state._mcp_probe_cache[key] = (now, result)
+            return result
+
+        # probe all active servers concurrently so the dashboard stays fast
+        active_servers = [server for server in merged if server["active"]]
+        probe_results = await asyncio.gather(
+            *(probe_with_cache(server) for server in active_servers)
+        )
+        next_probe = iter(probe_results)
+        for server in merged:
+            result = next(next_probe) if server["active"] else disabled
             servers.append(
                 {
                     "id": server["id"],
                     "url": server["url"],
                     "source": server["source"],
+                    "active": server["active"],
                     **result,
                 }
             )

@@ -36,9 +36,13 @@ def _make_stub_modules() -> None:
     sys.modules.setdefault("livekit.api", api_mod)
     sys.modules.setdefault("livekit.rtc", rtc_mod)
 
-    httpx = types.ModuleType("httpx")
-    httpx.AsyncClient = object  # placeholder, not used by the tested helpers
-    sys.modules.setdefault("httpx", httpx)
+    try:
+        import httpx  # noqa: F401  - a real httpx beats the stub, so that
+        # other test modules probing over real HTTP keep working
+    except ImportError:
+        stub = types.ModuleType("httpx")
+        stub.AsyncClient = object  # placeholder, not used by the tested helpers
+        sys.modules.setdefault("httpx", stub)
 
 
 _make_stub_modules()
