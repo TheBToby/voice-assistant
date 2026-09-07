@@ -23,6 +23,7 @@ from livekit.plugins import openai, silero
 from livekit.plugins import elevenlabs
 
 import audit as audit_module
+import log_filters
 from assistant import Assistant
 from config import AgentSettings, apply_overrides
 from timers import TimerService
@@ -252,6 +253,12 @@ def main() -> None:
     logging.basicConfig(level=level)
     # quiet down noisy third-party loggers a bit
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    # ElevenLabs STT websockets close with code 1000 (normal closure) when a
+    # session ends; the plugin logs a full ERROR traceback and the framework
+    # logs its automatic retry. That expected, self-healed noise is hidden at
+    # info and higher, and logged as DEBUG with LOG_LEVEL=debug (see
+    # log_filters.py).
+    log_filters.install()
 
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
 
