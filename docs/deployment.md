@@ -127,11 +127,21 @@ these ports reach the LXC from the device side:
 
 If the Proxmox/LXC firewall (the `pct` firewall option) is enabled, allow
 exactly those ports on the LXC. Routing must be **bidirectional** — the server
-also sends packets back to the device's ICE candidates. Optional tuning: set
-`NODE_IP=<LXC-LAN-IP>` in `.env` so the server only advertises the LAN
-candidate; by default it also advertises its docker bridges (172.17/172.18.x)
-and — with `rtc.enable_loopback_candidate: true`, used by the port-forward
-test flow — 127.0.0.1. Harmless, but ICE wastes a few checks on them.
+also sends packets back to the device's ICE candidates.
+
+**Recommended for device deployments:** set `NODE_IP=<LXC-LAN-IP>` in `.env`
+so the server advertises **exactly one** ICE candidate (the LAN IP). By
+default it also advertises its docker bridges (172.17/172.18.x) and — with
+`rtc.enable_loopback_candidate: true` (port-forward test flow) — 127.0.0.1.
+Browsers shrug those extras off, but the XVF3800's minimal ICE stack can
+wedge on them: the publisher transport connects via the real candidate while
+the subscriber transport never completes DTLS, and the session dies seconds
+later (`Unreachable` / `JOIN_TIMEOUT`). Set `NODE_IP=<LAN-IP>` and, on
+production, `enable_loopback_candidate: false` in `livekit/livekit.yaml`.
+
+A watchdog that timestamps LiveKit outages (to correlate with server logs):
+`scripts/lk_watchdog.sh http://<LAN-IP>:7880 10 86400` — logs `TRANSITION`
+lines on every UP/DOWN change.
 
 ## Autostart & operations
 
@@ -148,6 +158,8 @@ test flow — 127.0.0.1. Harmless, but ICE wastes a few checks on them.
 | Symptom | Fix |
 |---|---|
 | `curl http://localhost:7880/` fails | `docker compose logs livekit`; port 7880 in use? |
+| Device joins then drops after seconds (`Unreachable`), downlink never completes | stale server state or unusable advertised ICE candidates: `docker compose restart` to reset, set `NODE_IP=<LAN-IP>` in `.env` (and `enable_loopback_candidate: false` in `livekit/livekit.yaml` for LAN) |
+| Agent logs `Connection refused` bursts to LiveKit | LiveKit restart windows: `docker inspect voice-assistant-livekit-1` (`RestartCount`, `OOMKilled`, `StartedAt`) + `docker compose logs livekit` around the timestamp; check LXC RAM (`docker stats`) and backup/backup-freeze jobs; the agent self-recovers (re-registers) |
 | Agent exits with auth error | `LIVEKIT_API_KEY/SECRET` in `.env` don't match the server's `LIVEKIT_KEYS` — restart stack after fixing |
 | Agent logs MCP connect errors | wrong `HOME_ASSISTANT_URL`/token, or integration not added in HA (404), wrong token (401) |
 | No agent audio in smoke test | first run may still be downloading models — check `docker compose logs agent`; verify `GREETING` is not empty |
