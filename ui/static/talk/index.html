@@ -57,6 +57,22 @@
       new Date().toLocaleTimeString() + '  ' + msg;
   }
 
+  // Microphone capture (getUserMedia) only exists in secure contexts
+  // (https:// or http://localhost). Plain http://<LAN-IP> can join and
+  // listen, but the browser will never hand out the mic.
+  function micAvailable() {
+    return Boolean(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  }
+
+  function micHint() {
+    return 'no microphone access - browsers only allow getUserMedia in a ' +
+      'secure context (https:// or http://localhost). Fix: serve the console ' +
+      'via TLS (docs/deployment.md, tls profile), tunnel the port to ' +
+      'localhost (docs/testing.md), or for quick LAN testing flag http://' +
+      location.host + ' as a secure origin: ' +
+      'chrome://flags/#unsafely-treat-insecure-origin-as-secure';
+  }
+
   async function api(path, options = {}) {
     const opts = { credentials: 'same-origin', headers: {}, ...options };
     if (opts.method && opts.method !== 'GET') opts.headers['X-VA-Request'] = '1';
@@ -85,6 +101,9 @@
       }
     } catch (err) {
       log('note: could not pre-fill from console (' + err.message + ')');
+    }
+    if (!micAvailable()) {
+      log('warning: ' + micHint());
     }
   })();
 
@@ -125,8 +144,12 @@
       await room.connect(url, token);
       log('connected to room: ' + room.name);
 
-      await room.localParticipant.setMicrophoneEnabled(true);
-      log('microphone live - start talking');
+      if (!micAvailable()) {
+        log('ERROR: ' + micHint());
+      } else {
+        await room.localParticipant.setMicrophoneEnabled(true);
+        log('microphone live - start talking');
+      }
       connectBtn.disabled = true;
       disconnectBtn.disabled = false;
     } catch (err) {

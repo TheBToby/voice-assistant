@@ -80,6 +80,14 @@ python3 scripts/mint_token.py --identity respeaker-1 --room home
 # browser: console Talk tab -> http://<host-ip>:8090/talk
 ```
 
+Note: browsers only hand out the microphone in a *secure context* — via
+`http://localhost` (port-forward/tunnel, see docs/testing.md) or HTTPS.
+Plain `http://<host-ip>:8090/talk` can listen to the device but not speak
+("no microphone access"). For LAN HTTPS without a public domain: enable the
+`tls` profile below, add `tls internal` to the site block in
+`caddy/Caddyfile` (self-signed; accept the browser warning once), set
+`UI_ROOT_PATH=/console`, and use `wss://<host-ip>` as the LiveKit URL.
+
 ## Public access (optional, `tls` profile)
 
 For access from outside the LAN:
