@@ -344,6 +344,7 @@ def parse_mcp_json(raw: str) -> list[dict]:
                 "headers": {
                     str(k): str(v) for k, v in (entry.get("headers") or {}).items()
                 },
+                "transport": normalize_mcp_transport(entry.get("transport")),
             }
         )
     return specs
@@ -393,6 +394,7 @@ def normalize_ui_mcp_list(raw: object) -> list[dict]:
                 "disabled_tools": normalize_disabled_tools(
                     entry.get("disabled_tools")
                 ),
+                "transport": normalize_mcp_transport(entry.get("transport")),
             }
         )
     return out
@@ -417,6 +419,18 @@ def normalize_disabled_tools(raw: object) -> list[str]:
         if text and text not in out:
             out.append(text)
     return out
+
+
+def normalize_mcp_transport(value: object) -> str:
+    """MCP transport for a server: "" (auto-detect), "sse", "streamable_http".
+
+    Auto-detection ("", "auto" or anything unrecognized) uses streamable HTTP
+    unless the URL path ends with "/sse" - the agent resolves this in
+    agent/config.py (mcp_transport_type). Kept lenient so an unrecognized
+    value can never break saving the whole settings form.
+    """
+    text = str(value or "").strip().lower()
+    return text if text in ("sse", "streamable_http") else ""
 
 
 def merge_masked_headers(incoming: list[dict], stored: list[dict]) -> list[dict]:
@@ -483,7 +497,7 @@ def merged_mcp_view(
 
     def add(
         server_id: str, url: str, headers: dict, source: str, active: bool,
-        disabled_tools: list[str] | None = None,
+        disabled_tools: list[str] | None = None, transport: str = "",
     ) -> None:
         view.append(
             {
@@ -493,6 +507,7 @@ def merged_mcp_view(
                 "source": source,
                 "active": bool(active) and server_id not in seen,
                 "disabled_tools": list(disabled_tools or []),
+                "transport": transport,
             }
         )
         seen.add(server_id)
@@ -505,9 +520,13 @@ def merged_mcp_view(
             "ui",
             bool(entry.get("enabled", True)),
             entry.get("disabled_tools"),
+            transport=entry.get("transport", ""),
         )
     for entry in env_list or []:
-        add(entry["id"], entry["url"], entry.get("headers", {}), "env", True)
+        add(
+            entry["id"], entry["url"], entry.get("headers", {}), "env", True,
+            transport=entry.get("transport", ""),
+        )
     if ha_url and ha_token:
         add(
             "home-assistant",
@@ -534,6 +553,7 @@ def agent_runtime_payload(
                 "url": entry["url"],
                 "headers": entry.get("headers", {}),
                 "disabled_tools": list(entry.get("disabled_tools") or []),
+                "transport": entry.get("transport", ""),
             }
             for entry in (ui_mcp_list or [])
             if entry.get("enabled", True)

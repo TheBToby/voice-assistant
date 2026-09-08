@@ -95,6 +95,9 @@ def test_apply_overrides_mcp_servers_shadow_env_and_ha():
              "headers": {"X-API-Key": "abc"},
              "disabled_tools": ["get_forecast", " ", "get_forecast"]},
             {"id": "home-assistant", "url": "http://other-ha/mcp", "headers": {}},
+            {"id": "legacy", "url": "http://old/rpc", "transport": "sse"},
+            # a bad transport falls back to auto-detect, the server survives
+            {"id": "typo", "url": "http://x/mcp", "transport": "websocket"},
         ],
     }
     servers: dict = {}
@@ -107,6 +110,9 @@ def test_apply_overrides_mcp_servers_shadow_env_and_ha():
     # per-tool switches from the console travel with the spec
     assert servers["weather"].disabled_tools == ("get_forecast",)
     assert servers["home-assistant"].disabled_tools == ()
+    # the transport choice travels with the spec; bad values are tolerated
+    assert servers["legacy"].transport == "sse"
+    assert servers["typo"].transport == ""
     # malformed entries are skipped, not fatal
     payload_bad = {"settings": {}, "mcp_servers": [{"url": "missing-id"}, "junk"]}
     assert apply_overrides(base, payload_bad) is not None

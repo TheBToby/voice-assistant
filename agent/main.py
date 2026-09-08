@@ -26,7 +26,7 @@ from livekit.plugins import elevenlabs
 import audit as audit_module
 import log_filters
 from assistant import Assistant
-from config import AgentSettings, apply_overrides
+from config import AgentSettings, apply_overrides, mcp_transport_type
 from timers import TimerService
 
 logger = logging.getLogger("voice-assistant")
@@ -46,8 +46,9 @@ class _ToolFilteredMCPServerHTTP(mcp.MCPServerHTTP):
         url: str,
         headers: dict | None = None,
         disabled_tools: Iterable[str] = (),
+        transport_type: str = "streamable_http",
     ) -> None:
-        super().__init__(url, headers=headers)
+        super().__init__(url, transport_type=transport_type, headers=headers)
         self._disabled_tools = frozenset(disabled_tools)
 
     async def list_tools(self, *args, **kwargs):  # noqa: ANN002, ANN003
@@ -83,6 +84,11 @@ def build_mcp_toolsets(settings: AgentSettings) -> list[mcp.MCPToolset]:
                     spec.url,
                     headers=spec.headers or None,
                     disabled_tools=spec.disabled_tools,
+                    # streamable HTTP unless the URL marks a legacy SSE
+                    # endpoint - livekit-agents' own URL detection would
+                    # otherwise pick SSE for every non-/mcp URL (e.g. Obot
+                    # "mcp-connect" gateways -> HTTP 400)
+                    transport_type=mcp_transport_type(spec.url, spec.transport),
                 ),
             )
         )

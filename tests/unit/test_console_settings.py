@@ -111,7 +111,7 @@ def test_normalize_ui_mcp_list():
     )
     assert servers[0] == {
         "id": "weather", "url": "http://w:9000/mcp", "headers": {}, "enabled": True,
-        "disabled_tools": [],
+        "disabled_tools": [], "transport": "",
     }
     assert servers[1]["id"] == "mcp-2"
     assert servers[1]["enabled"] is False
@@ -224,5 +224,6 @@ def test_agent_runtime_payload():
             "url": "http://w/mcp",
             "headers": {},
             "disabled_tools": ["rain"],
+            "transport": "",
         }
     ]

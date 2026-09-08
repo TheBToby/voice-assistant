@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agent"))
 
-from config import AgentSettings, _parse_mcp_servers_json
+from config import AgentSettings, _parse_mcp_servers_json, mcp_transport_type
 
 import json
 
@@ -133,3 +133,46 @@ def test_persona_overrides():
     s = AgentSettings.from_env(env)
     assert s.instructions == "You are a pirate."
     assert s.assistant_name == "Jack"
+
+
+def test_mcp_transport_autodetect_defaults_to_streamable_http():
+    """Gateway URLs that do not end in /mcp (e.g. an Obot mcp-connect URL)
+    must use streamable HTTP. livekit-agents' own URL detection would pick
+    legacy SSE here and fail with 'HTTP 400 Bad Request' (regression)."""
+    assert (
+        mcp_transport_type(
+            "https://obot.example.com/mcp-connect/default-voice-assistant-1234"
+        )
+        == "streamable_http"
+    )
+    assert mcp_transport_type("http://ha:8123/api/mcp") == "streamable_http"
+    assert mcp_transport_type("https://example.com/mcp/") == "streamable_http"
+
+
+def test_mcp_transport_sse_for_sse_urls_and_explicit_override():
+    assert mcp_transport_type("http://localhost:9001/sse") == "sse"
+    assert mcp_transport_type("https://example.com/SSE/") == "sse"
+    # an explicit transport always wins over the auto-detection
+    assert mcp_transport_type("https://example.com/mcp", "sse") == "sse"
+    assert (
+        mcp_transport_type("https://old.example.com/sse", "streamable_http")
+        == "streamable_http"
+    )
+
+
+def test_mcp_servers_json_parses_and_validates_transport():
+    raw = json.dumps(
+        [
+            {"id": "gw", "url": "https://obot.example.com/mcp-connect/x"},
+            {"id": "legacy", "url": "https://example.com/rpc", "transport": "sse"},
+            {"id": "auto", "url": "https://example.com/mcp", "transport": "auto"},
+        ]
+    )
+    specs = {s.id: s for s in _parse_mcp_servers_json(raw)}
+    assert specs["gw"].transport == ""  # "" = auto-detect
+    assert specs["legacy"].transport == "sse"
+    assert specs["auto"].transport == ""
+    with pytest.raises(ValueError):
+        _parse_mcp_servers_json(
+            json.dumps([{"url": "http://x/mcp", "transport": "websocket"}])
+        )

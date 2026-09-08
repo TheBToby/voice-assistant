@@ -10,6 +10,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field, fields, replace
+from urllib.parse import urlparse
 
 from i18n import DEFAULT_LANGUAGE, PACKS, normalize_language
 from i18n import language_name as human_language_name
@@ -68,6 +69,53 @@ class MCPServerSpec:
     headers: dict[str, str] = field(default_factory=dict)
     # tools hidden from the assistant (per-tool toggles in the web console)
     disabled_tools: tuple[str, ...] = ()
+    # MCP transport: "" = auto-detect (see mcp_transport_type), or an explicit
+    # "sse" / "streamable_http" override.
+    transport: str = ""
+
+
+# livekit-agents' MCPServerHTTP only picks streamable HTTP when the URL path
+# ends with "/mcp" and silently falls back to the long-deprecated SSE transport
+# otherwise. That breaks streamable-HTTP-only gateways such as Obot
+# (.../mcp-connect/<id>) with "HTTP 400 Bad Request", so detection is flipped
+# here: streamable HTTP is the default and only URLs whose path ends with
+# "/sse" are treated as legacy SSE endpoints. An explicit transport wins.
+_TRANSPORTS = ("sse", "streamable_http")
+
+
+def mcp_transport_type(url: str, transport: str = "") -> str:
+    """Resolve the MCPServerHTTP transport ("sse" | "streamable_http")."""
+    explicit = (transport or "").strip().lower()
+    if explicit in _TRANSPORTS:
+        return explicit
+    path = urlparse(url).path.lower().rstrip("/")
+    return "sse" if path.endswith("/sse") else "streamable_http"
+
+
+def _normalized_transport(raw: object, *, strict: bool, where: str) -> str:
+    """Normalize a configured transport; "" / "auto" mean auto-detect.
+
+    With strict=True (MCP_SERVERS_JSON) unknown values raise ValueError; the
+    console path warns and falls back to auto-detect instead, so a typo can
+    never silently drop a whole server.
+    """
+    text = str(raw or "").strip().lower()
+    if text in ("", "auto"):
+        return ""
+    if text in _TRANSPORTS:
+        return text
+    if strict:
+        raise ValueError(
+            f"{where}: invalid transport {raw!r} "
+            "(expected 'sse' or 'streamable_http')"
+        )
+    logger.warning(
+        "%s: ignoring invalid MCP transport %r (expected 'sse' or "
+        "'streamable_http'); using auto-detection",
+        where,
+        raw,
+    )
+    return ""
 
 
 @dataclass(frozen=True)
@@ -310,6 +358,8 @@ def apply_overrides(base: AgentSettings, payload: dict) -> AgentSettings:
 
     specs: list[MCPServerSpec] = []
     for entry in payload.get("mcp_servers") or []:
+        if not isinstance(entry, dict):
+            continue
         try:
             specs.append(
                 MCPServerSpec(
@@ -328,6 +378,11 @@ def apply_overrides(base: AgentSettings, payload: dict) -> AgentSettings:
                             )
                             if name
                         )
+                    ),
+                    transport=_normalized_transport(
+                        entry.get("transport"),
+                        strict=False,
+                        where=f"console MCP server {entry.get('id')!r}",
                     ),
                 )
             )
@@ -349,7 +404,7 @@ def apply_overrides(base: AgentSettings, payload: dict) -> AgentSettings:
 
 
 def _parse_mcp_servers_json(raw: str) -> list[MCPServerSpec]:
-    """Parse MCP_SERVERS_JSON: [{"id": "...", "url": "...", "headers": {..}}]."""
+    """Parse MCP_SERVERS_JSON: [{"id", "url", "headers", "transport"}]."""
     raw = (raw or "").strip()
     if not raw:
         return []
@@ -373,6 +428,11 @@ def _parse_mcp_servers_json(raw: str) -> list[MCPServerSpec]:
             headers={
                 str(k): str(v) for k, v in (entry.get("headers") or {}).items()
             },
+            transport=_normalized_transport(
+                entry.get("transport"),
+                strict=True,
+                where=f"MCP_SERVERS_JSON[{i}]",
+            ),
         )
         specs.append(spec)
     return specs

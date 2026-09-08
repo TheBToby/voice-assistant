@@ -112,9 +112,25 @@ not configured; HTTP 401 = wrong token.
 MCP_SERVERS_JSON=[{"id":"music","url":"http://music-mcp.local:9000/mcp"},{"id":"calendar","url":"https://example.com/mcp","headers":{"Authorization":"Bearer xyz"}}]
 ```
 
-Rules: each entry needs `url`; optional `id` (defaults to `mcp-<n>`) and
-`headers`. Duplicate ids keep the first definition. Streamable HTTP and SSE
-endpoints are both supported by `MCPServerHTTP`.
+Rules: each entry needs `url`; optional `id` (defaults to `mcp-<n>`),
+`headers` and `transport` (`"streamable_http"` or `"sse"`). Duplicate ids
+keep the first definition.
+
+The transport is auto-detected: **streamable HTTP** by default, the legacy
+SSE transport only when the URL path ends with `/sse`. (Older livekit-agents
+releases detected the other way round — SSE for everything not ending in
+`/mcp` — which made streamable-HTTP-only gateways such as Obot fail with
+`HTTP 400 Bad Request`.) Force the deprecated HTTP+SSE protocol with
+`"transport": "sse"` if a server only speaks it at a URL not ending in
+`/sse`.
+
+MCP gateways (e.g. an Obot deployment) work like any other server — paste
+its per-client "Connect URL" and authenticate via headers if the gateway
+requires it:
+
+```bash
+MCP_SERVERS_JSON=[{"id":"mcp-gateway","url":"https://obot.example.com/mcp-connect/<id>","headers":{"Authorization":"Bearer <token>"}}]
+```
 
 ## Adding a new skill (code)
 
