@@ -151,6 +151,11 @@ class AgentSettings:
     # runtime-only (never set from env): comes from the console's
     # "Store transcripts" setting via apply_overrides()
     transcripts_enabled: bool = False
+    # Temporary diagnostics: record incoming device audio to WAV files
+    # (agent/debug_audio.py) so "is real audio arriving?" can be verified
+    # by listening. Default on while the voice detection issue is open;
+    # set DEBUG_RECORD_AUDIO=false to disable.
+    debug_record_audio: bool = True
     # MCP servers managed in the web console; first definition per id wins,
     # so these shadow MCP_SERVERS_JSON entries and Home Assistant
     extra_mcp_specs: tuple[MCPServerSpec, ...] = ()
@@ -203,6 +208,7 @@ class AgentSettings:
             mcp_servers_json=e.get("MCP_SERVERS_JSON", ""),
             console_url=_console_url(e),
             console_token=_internal_token(e),
+            debug_record_audio=_to_bool(e.get("DEBUG_RECORD_AUDIO", "true")),
             audit_enabled=not _to_bool(e.get("CONSOLE_AUDIT_DISABLED", "")),
         )
 

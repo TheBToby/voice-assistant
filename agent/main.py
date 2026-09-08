@@ -24,6 +24,7 @@ from livekit.plugins import openai, silero
 from livekit.plugins import elevenlabs
 
 import audit as audit_module
+import debug_audio
 import log_filters
 from assistant import Assistant
 from config import AgentSettings, apply_overrides, mcp_transport_type
@@ -310,6 +311,19 @@ async def entrypoint(ctx: JobContext) -> None:
         "assistant language: %s (%s)", settings.language, settings.language_name
     )
     logger.info("joining room %s", ctx.room.name)
+
+    # ------------------------------------------------------------------
+    # diagnostics (temporary): record everything the agent HEARS to WAV
+    # files so "is real voice audio arriving?" can be verified by
+    # listening (DEBUG_RECORD_AUDIO=false turns this off; see
+    # agent/debug_audio.py). Attached before connect() so the device's
+    # already-published track is captured too.
+    # ------------------------------------------------------------------
+    recorder = None
+    if settings.debug_record_audio:
+        recorder = debug_audio.RemoteAudioRecorder()
+        recorder.attach(ctx.room)
+
     await ctx.connect()
 
     # ------------------------------------------------------------------
@@ -365,6 +379,33 @@ async def entrypoint(ctx: JobContext) -> None:
         settings, build_mcp_toolsets(settings), timers=timers, audit=reporter
     )
     assistant.bind_session(session)
+
+    if recorder is not None:
+        # one-line breadcrumbs for the voice chain: VAD seeing speech and
+        # STT producing text - together with the WAV recordings this pins
+        # down where "no voice command recognized" breaks
+        def _on_transcript(ev) -> None:  # noqa: ANN001
+            if getattr(ev, "is_final", False):
+                logger.info(
+                    "audio debug: final user transcript: %r", ev.transcript
+                )
+
+        def _on_user_state(ev) -> None:  # noqa: ANN001
+            if ev.new_state == "speaking":
+                logger.info("audio debug: VAD: user started speaking")
+            elif ev.new_state == "listening":
+                logger.info("audio debug: VAD: user stopped speaking")
+
+        session.on("user_input_transcribed", _on_transcript)
+        session.on("user_state_changed", _on_user_state)
+
+        async def _close_recorder() -> None:
+            await recorder.aclose()
+
+        try:
+            ctx.add_shutdown_callback(_close_recorder)
+        except AttributeError:  # older/newer livekit-agents API
+            logger.debug("add_shutdown_callback unavailable; recorder not closed")
 
     if reporter is not None:
         reporter.event(

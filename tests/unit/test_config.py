@@ -176,3 +176,16 @@ def test_mcp_servers_json_parses_and_validates_transport():
         _parse_mcp_servers_json(
             json.dumps([{"url": "http://x/mcp", "transport": "websocket"}])
         )
+
+
+def test_debug_record_audio_enabled_by_default():
+    """The audio recording diagnostics default to ON while the voice
+    detection issue is open (see agent/debug_audio.py)."""
+    assert AgentSettings.from_env(base_env()).debug_record_audio is True
+    for off in ("false", "0", "no", "off", ""):
+        env = base_env() | {"DEBUG_RECORD_AUDIO": off}
+        assert AgentSettings.from_env(env).debug_record_audio is False
+    assert (
+        AgentSettings.from_env(base_env() | {"DEBUG_RECORD_AUDIO": "yes"}).debug_record_audio
+        is True
+    )
