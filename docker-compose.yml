@@ -24,7 +24,12 @@ name: voice-assistant
 
 services:
   livekit:
-    image: livekit/livekit-server:v1.9.10
+    # NOTE: do not downgrade to v1.9.10 - it ships a known SFU panic
+    # ("interface conversion: *sfu.RedPrimaryReceiver is not sfu.REDTransformer",
+    # upstream livekit#4244) that kills the server as soon as ANY subscriber
+    # joins a room where the agent published its audio/red track. Fixed in
+    # v1.9.11 (upstream #4219/#4220).
+    image: livekit/livekit-server:v1.9.11
     restart: unless-stopped
     network_mode: host
     command: --config /etc/livekit/livekit.yaml
