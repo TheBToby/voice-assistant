@@ -384,6 +384,25 @@ def create_app() -> FastAPI:
     # ------------------------------------------------------------------
     # MCP servers API (UI-managed list)
     # ------------------------------------------------------------------
+    def resolve_server_config(server_id: str) -> dict:
+        """URL + real auth headers for a configured server id.
+
+        Lets the console probe/call servers whose secrets it never exposes
+        (MCP_SERVERS_JSON / Home Assistant entries) - the values are used
+        for the outgoing request only, never echoed to the client.
+        """
+        for entry in settings_core.merged_mcp_view(
+            state.stored_mcp_list(),
+            settings_core.env_mcp_servers(state.env),
+            state.env,
+            mask_secrets=False,
+        ):
+            if entry["id"] == server_id:
+                return entry
+        raise HTTPException(
+            status_code=404, detail=f"unknown MCP server id '{server_id}'"
+        )
+
     @app.get("/api/mcp-servers")
     async def api_mcp_get(user: dict = Depends(require_user)) -> dict:
         return {
@@ -403,6 +422,10 @@ def create_app() -> FastAPI:
             server_list = settings_core.normalize_ui_mcp_list(body.get("servers"))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
+        # masked header values from the edit form keep the stored secrets
+        server_list = settings_core.merge_masked_headers(
+            server_list, state.stored_mcp_list()
+        )
         state.db.set_settings(
             {settings_core.MCP_SERVERS_KEY: json.dumps(server_list)},
             updated_by=user.get("sub", ""),
@@ -429,12 +452,56 @@ def create_app() -> FastAPI:
     async def api_mcp_test(
         request: Request, user: dict = Depends(require_user)
     ) -> dict:
-        """Probe one server: body = {"url": ..., "headers": {...}}."""
+        """Probe one server: body = {"url": ..., "headers": {...}} or {"id": ...}."""
         body = await request.json()
         url = str(body.get("url", "") or "").strip()
+        headers = body.get("headers") or {}
+        server_id = str(body.get("id", "") or "").strip()
+        if server_id:
+            entry = resolve_server_config(server_id)
+            url, headers = entry["url"], entry.get("headers") or {}
         if not url:
-            raise HTTPException(status_code=422, detail="url required")
-        return await probes.probe_mcp(url, body.get("headers") or {})
+            raise HTTPException(status_code=422, detail="url or id required")
+        return await probes.probe_mcp(url, headers)
+
+    @app.post("/api/mcp-servers/call")
+    async def api_mcp_call(
+        request: Request, user: dict = Depends(require_user)
+    ) -> dict:
+        """Call one tool: body = {"tool", "arguments"} + url/headers or id."""
+        body = await request.json()
+        tool_name = str(body.get("tool", "") or "").strip()
+        if not tool_name:
+            raise HTTPException(status_code=422, detail="tool required")
+        arguments = body.get("arguments")
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
+            raise HTTPException(
+                status_code=422, detail="arguments must be a JSON object"
+            )
+        url = str(body.get("url", "") or "").strip()
+        headers = body.get("headers") or {}
+        server_id = str(body.get("id", "") or "").strip()
+        if server_id:
+            entry = resolve_server_config(server_id)
+            url, headers = entry["url"], entry.get("headers") or {}
+        if not url:
+            raise HTTPException(status_code=422, detail="url or id required")
+        result = await probes.call_tool(url, headers, tool_name, arguments)
+        # audit trail: console-side tool tests are visible like agent tool calls
+        state.record_event(
+            "tool.call",
+            {
+                "tool": tool_name,
+                "server": server_id or url,
+                "source": "console",
+                "ok": result["ok"],
+                "latency_ms": result["latency_ms"],
+                "error": result["error"][:200],
+            },
+        )
+        return result
 
     # ------------------------------------------------------------------
     # devices API
@@ -528,6 +595,7 @@ def create_app() -> FastAPI:
             "ok": None,  # not probed
             "latency_ms": 0,
             "tools": [],
+            "tool_details": [],
             "error": "",
             "server_info": {},
             "protocol_version": "",

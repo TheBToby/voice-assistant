@@ -363,8 +363,8 @@ def env_mcp_servers(env: dict) -> list[dict]:
 def normalize_ui_mcp_list(raw: object) -> list[dict]:
     """Validate/normalize a UI-supplied MCP server list.
 
-    Each entry: {"id", "url", "headers"?, "enabled"?}. Raises ValueError on
-    structural problems so the API can answer 400.
+    Each entry: {"id", "url", "headers"?, "enabled"?, "disabled_tools"?}.
+    Raises ValueError on structural problems so the API can answer 400.
     """
     if raw is None:
         return []
@@ -390,8 +390,60 @@ def normalize_ui_mcp_list(raw: object) -> list[dict]:
                 "url": str(entry["url"]).strip(),
                 "headers": {str(k): str(v) for k, v in headers.items()},
                 "enabled": parse_bool(entry.get("enabled", True), True),
+                "disabled_tools": normalize_disabled_tools(
+                    entry.get("disabled_tools")
+                ),
             }
         )
+    return out
+
+
+def normalize_disabled_tools(raw: object) -> list[str]:
+    """Tool names a server should NOT offer to the assistant (deduplicated).
+
+    Accepted input: a list of names (other items are str()-coerced), a single
+    name, or None. Raises ValueError on non-list input so the API can answer
+    422 instead of silently storing a broken config.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raise ValueError("disabled_tools must be a list of tool names")
+    out: list[str] = []
+    for name in raw:
+        text = str(name).strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def merge_masked_headers(incoming: list[dict], stored: list[dict]) -> list[dict]:
+    """Keep real header values where the client re-sent the masked form.
+
+    The display view masks header secrets (``xyz***``) and the edit form is
+    prefilled with them; saving such a form must not overwrite the stored
+    credentials with the mask. A value equal to the masked form of the stored
+    value therefore restores the stored value. (Consequence: a header cannot
+    deliberately be changed *to* a mask-looking value like ``abc***``.)
+    """
+    if not incoming or not stored:
+        return list(incoming or [])
+    stored_by_id: dict[str, dict] = {}
+    for entry in stored:
+        stored_by_id.setdefault(entry["id"], entry)
+    out: list[dict] = []
+    for entry in incoming:
+        old = stored_by_id.get(entry["id"])
+        if old:
+            headers = dict(entry.get("headers") or {})
+            for name, value in headers.items():
+                old_value = (old.get("headers") or {}).get(name)
+                if old_value is not None and value == mask_secret(old_value):
+                    headers[name] = old_value
+            entry = {**entry, "headers": headers}
+        out.append(entry)
     return out
 
 
@@ -429,7 +481,10 @@ def merged_mcp_view(
     def prepare(value: str) -> str:
         return mask_secret(value) if mask_secrets else value
 
-    def add(server_id: str, url: str, headers: dict, source: str, active: bool) -> None:
+    def add(
+        server_id: str, url: str, headers: dict, source: str, active: bool,
+        disabled_tools: list[str] | None = None,
+    ) -> None:
         view.append(
             {
                 "id": server_id,
@@ -437,6 +492,7 @@ def merged_mcp_view(
                 "headers": {k: prepare(v) for k, v in headers.items()},
                 "source": source,
                 "active": bool(active) and server_id not in seen,
+                "disabled_tools": list(disabled_tools or []),
             }
         )
         seen.add(server_id)
@@ -448,6 +504,7 @@ def merged_mcp_view(
             entry.get("headers", {}),
             "ui",
             bool(entry.get("enabled", True)),
+            entry.get("disabled_tools"),
         )
     for entry in env_list or []:
         add(entry["id"], entry["url"], entry.get("headers", {}), "env", True)
@@ -476,6 +533,7 @@ def agent_runtime_payload(
                 "id": entry["id"],
                 "url": entry["url"],
                 "headers": entry.get("headers", {}),
+                "disabled_tools": list(entry.get("disabled_tools") or []),
             }
             for entry in (ui_mcp_list or [])
             if entry.get("enabled", True)

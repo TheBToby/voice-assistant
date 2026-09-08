@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Iterable
 
 from dotenv import load_dotenv
 from livekit import agents
@@ -31,6 +32,44 @@ from timers import TimerService
 logger = logging.getLogger("voice-assistant")
 
 
+class _ToolFilteredMCPServerHTTP(mcp.MCPServerHTTP):
+    """MCPServerHTTP that hides individual tools disabled in the console.
+
+    livekit-agents fetches an MCP server's tools by calling ``list_tools()``
+    on the server when the toolset is set up. Filtering here removes disabled
+    tools before they ever reach the LLM (tools whose names cannot be
+    determined are kept - the console toggle is name-based).
+    """
+
+    def __init__(
+        self,
+        url: str,
+        headers: dict | None = None,
+        disabled_tools: Iterable[str] = (),
+    ) -> None:
+        super().__init__(url, headers=headers)
+        self._disabled_tools = frozenset(disabled_tools)
+
+    async def list_tools(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        tools = await super().list_tools(*args, **kwargs)
+        if not self._disabled_tools:
+            return tools
+        kept = [
+            tool
+            for tool in tools
+            if getattr(getattr(tool, "info", None), "name", None)
+            not in self._disabled_tools
+        ]
+        dropped = len(tools) - len(kept)
+        if dropped:
+            logger.info(
+                "MCP server %s: %d tool(s) hidden (disabled in the console)",
+                self.url,
+                dropped,
+            )
+        return kept
+
+
 def build_mcp_toolsets(settings: AgentSettings) -> list[mcp.MCPToolset]:
     """Wrap every configured MCP server in an MCPToolset."""
     toolsets: list[mcp.MCPToolset] = []
@@ -40,7 +79,11 @@ def build_mcp_toolsets(settings: AgentSettings) -> list[mcp.MCPToolset]:
         toolsets.append(
             mcp.MCPToolset(
                 id=spec.id,
-                mcp_server=mcp.MCPServerHTTP(spec.url, headers=spec.headers or None),
+                mcp_server=_ToolFilteredMCPServerHTTP(
+                    spec.url,
+                    headers=spec.headers or None,
+                    disabled_tools=spec.disabled_tools,
+                ),
             )
         )
     return toolsets

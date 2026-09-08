@@ -92,7 +92,8 @@ def test_apply_overrides_mcp_servers_shadow_env_and_ha():
         "settings": {},
         "mcp_servers": [
             {"id": "weather", "url": "http://ui-weather/mcp",
-             "headers": {"X-API-Key": "abc"}},
+             "headers": {"X-API-Key": "abc"},
+             "disabled_tools": ["get_forecast", " ", "get_forecast"]},
             {"id": "home-assistant", "url": "http://other-ha/mcp", "headers": {}},
         ],
     }
@@ -103,6 +104,9 @@ def test_apply_overrides_mcp_servers_shadow_env_and_ha():
     assert servers["weather"].url == "http://ui-weather/mcp"
     assert servers["weather"].headers == {"X-API-Key": "abc"}
     assert servers["home-assistant"].url == "http://other-ha/mcp"
+    # per-tool switches from the console travel with the spec
+    assert servers["weather"].disabled_tools == ("get_forecast",)
+    assert servers["home-assistant"].disabled_tools == ()
     # malformed entries are skipped, not fatal
     payload_bad = {"settings": {}, "mcp_servers": [{"url": "missing-id"}, "junk"]}
     assert apply_overrides(base, payload_bad) is not None

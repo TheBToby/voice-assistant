@@ -59,8 +59,15 @@
     <section id="tab-dashboard" class="tab">
       <div class="cards" id="status-cards"></div>
       <div class="panel">
-        <h2>MCP servers</h2>
+        <div class="row-between">
+          <h2>MCP servers</h2>
+          <a class="button secondary" href="#mcp">Manage servers &amp; tools</a>
+        </div>
         <div id="status-mcp" class="table-holder"></div>
+        <p class="hint">
+          Discovered tools and per-server configuration are shown in the
+          <a href="#mcp">MCP Servers</a> tab.
+        </p>
       </div>
       <div class="panel">
         <h2>Providers</h2>
@@ -108,12 +115,38 @@
           </div>
         </div>
         <p class="hint">
-          Tools from these servers are offered to the assistant. Changes apply
-          to newly started sessions. Entries from <code>MCP_SERVERS_JSON</code>
-          (env) and Home Assistant are shown read-only; add a UI entry with the
-          same ID to override them.
+          Tools from these servers are offered to the assistant. Expand a
+          server for connection details, its tools and the per-tool switches -
+          changes apply to newly started sessions. Entries from
+          <code>MCP_SERVERS_JSON</code> (env) and Home Assistant are read-only;
+          add a console entry with the same ID to override them.
         </p>
         <div id="mcp-list"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Tool tester</h2>
+        <p class="hint">
+          Call a tool on a real server: pick the server and tool, type the
+          request arguments as JSON and compare with the raw response.
+        </p>
+        <div class="tester-grid">
+          <label>Server
+            <select id="mcp-test-server"></select>
+          </label>
+          <label>Tool
+            <select id="mcp-test-tool"></select>
+          </label>
+        </div>
+        <p id="mcp-test-desc" class="hint"></p>
+        <label>Request arguments (JSON)
+          <textarea id="mcp-test-args" class="mono" rows="7" spellcheck="false">{}</textarea>
+        </label>
+        <div>
+          <button id="mcp-test-run">Run tool</button>
+          <button id="mcp-test-refresh" class="ghost">Refresh tools</button>
+        </div>
+        <pre id="mcp-test-output" class="mono hidden"></pre>
       </div>
     </section>
 

@@ -49,12 +49,14 @@ def summarize_probe(
     error: str = "",
     server_info: dict | None = None,
     protocol_version: str = "",
+    tool_details: list[dict] | None = None,
 ) -> dict:
     """Uniform probe result. `error` may carry a warning while ok=True."""
     return {
         "ok": ok,
         "latency_ms": int((time.time() - started) * 1000),
         "tools": tools or [],
+        "tool_details": tool_details or [],
         "error": error,
         "server_info": server_info or {},
         "protocol_version": protocol_version,
@@ -139,12 +141,30 @@ def parse_mcp_response(
 
 def extract_tool_names(result: dict) -> list[str]:
     """Tool names from a tools/list result, tolerating shape differences."""
+    return [
+        entry["name"] for entry in extract_tools(result)
+    ]
+
+
+def extract_tools(result: dict) -> list[dict]:
+    """Tool details from a tools/list result, tolerating shape differences.
+
+    Returns [{"name", "description"?, "input_schema"?}, ...] - whatever the
+    server offers per tool, so the console can show a real tools overview
+    instead of bare names.
+    """
     tools = result.get("tools") if isinstance(result, dict) else None
-    names: list[str] = []
+    details: list[dict] = []
     for tool in tools or []:
-        if isinstance(tool, dict) and tool.get("name"):
-            names.append(str(tool["name"]))
-    return names
+        if not isinstance(tool, dict) or not tool.get("name"):
+            continue
+        entry = {"name": str(tool["name"])}
+        if tool.get("description"):
+            entry["description"] = str(tool["description"])
+        if isinstance(tool.get("inputSchema"), dict):
+            entry["input_schema"] = tool["inputSchema"]
+        details.append(entry)
+    return details
 
 
 def extract_server_info(result: dict) -> dict:
@@ -321,9 +341,11 @@ async def _probe_streamable(
             started, True, server_info=server_info, protocol_version=negotiated,
             error=f"initialized, but {_rpc_error(tools_message, 'tools/list')}",
         )
+    tools_result = tools_message.get("result") or {}
     return summarize_probe(
         started, True,
-        tools=extract_tool_names(tools_message.get("result") or {}),
+        tools=extract_tool_names(tools_result),
+        tool_details=extract_tools(tools_result),
         server_info=server_info, protocol_version=negotiated,
     )
 
@@ -347,13 +369,14 @@ async def _next_sse_event(frames: "asyncio.Queue") -> tuple[str, str] | None:
 
 
 async def _wait_for_rpc_response(
-    frames: "asyncio.Queue", expected_id: int
+    frames: "asyncio.Queue", expected_id: int,
+    timeout: float = PROBE_TIMEOUT,
 ) -> dict | None:
     """JSON-RPC response with `expected_id` from the SSE stream (or None)."""
     while True:
         try:
             event = await asyncio.wait_for(
-                _next_sse_event(frames), timeout=PROBE_TIMEOUT
+                _next_sse_event(frames), timeout=timeout
             )
         except asyncio.TimeoutError:
             return None
@@ -468,9 +491,11 @@ async def _probe_legacy_sse(
                     error=f"initialized, but "
                     f"{_rpc_error(tools_message, 'tools/list')}",
                 )
+            legacy_tools = tools_message.get("result") or {}
             return summarize_probe(
                 started, True,
-                tools=extract_tool_names(tools_message.get("result") or {}),
+                tools=extract_tool_names(legacy_tools),
+                tool_details=extract_tools(legacy_tools),
                 server_info=server_info, protocol_version=negotiated,
             )
     finally:
@@ -524,6 +549,281 @@ async def probe_mcp(url: str, headers: dict | None = None) -> dict:
                 )
     except Exception as exc:  # noqa: BLE001 - report any probe failure
         return summarize_probe(started, False, error=_network_error_text(exc))
+
+
+# ---------------------------------------------------------------------------
+# tool calls (console "tool tester")
+# ---------------------------------------------------------------------------
+CALL_TIMEOUT = 30.0  # real tool runs may take notably longer than probes
+
+
+def summarize_call(
+    started: float,
+    ok: bool,
+    content: list[dict] | None = None,
+    structured_content: dict | None = None,
+    is_error: bool = False,
+    error: str = "",
+) -> dict:
+    """Uniform tools/call result (ok=True means the RPC itself succeeded)."""
+    return {
+        "ok": ok,
+        "latency_ms": int((time.time() - started) * 1000),
+        "content": content or [],
+        "structured_content": structured_content,
+        "is_error": bool(is_error),
+        "error": error,
+    }
+
+
+def _call_result_summary(started: float, message: dict, action: str) -> dict:
+    """Shape a tools/call JSON-RPC response into a summarize_call result."""
+    if message.get("error"):
+        return summarize_call(started, False, error=_rpc_error(message, action))
+    result = message.get("result")
+    if not isinstance(result, dict):
+        return summarize_call(
+            started, False, error=f"{action}: unexpected response shape"
+        )
+    content: list[dict] = []
+    for item in result.get("content") or []:
+        if isinstance(item, dict):
+            entry = {"type": str(item.get("type") or "unknown")}
+            if item.get("text") is not None:
+                entry["text"] = str(item["text"])
+            if item.get("data") is not None:
+                entry["data"] = str(item["data"])[:2000]
+            content.append(entry)
+    structured = result.get("structuredContent")
+    is_error = bool(result.get("isError"))
+    return summarize_call(
+        started, True,
+        content=content,
+        structured_content=structured if isinstance(structured, dict) else None,
+        is_error=is_error,
+        error="the tool reported an error result" if is_error else "",
+    )
+
+
+def _tools_call_body(tool_name: str, arguments: dict) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": arguments},
+    }
+
+
+async def _call_tool_streamable(
+    client, url: str, base_headers: dict, started: float,
+    tool_name: str, arguments: dict,
+) -> dict:
+    """tools/call over the streamable-HTTP transport (JSON or SSE responses)."""
+    post_headers = {**base_headers, "Content-Type": "application/json"}
+    last_error = ""
+    response = None
+    negotiated = ""
+
+    for version in MCP_PROTOCOL_VERSIONS:
+        response = await client.post(
+            url, json=_initialize_body(version), headers=post_headers
+        )
+        if response.status_code in (404, 405):
+            raise NotStreamableEndpoint(
+                f"HTTP {response.status_code} on initialize"
+            )
+        if response.status_code >= 400:
+            return summarize_call(
+                started, False,
+                error=f"initialize failed: {status_hint(response.status_code)}",
+            )
+        message = parse_mcp_response(
+            response.text, response.headers.get("content-type", ""), expect_id=1
+        )
+        if message.get("error"):
+            last_error = _rpc_error(message, "initialize")
+            if (
+                _looks_like_version_mismatch(last_error)
+                and version != MCP_PROTOCOL_VERSIONS[-1]
+            ):
+                continue  # strict server - retry with the next older version
+            return summarize_call(started, False, error=last_error)
+        negotiated = str((message.get("result") or {}).get("protocolVersion") or version)
+        break
+    else:  # every offered version was rejected as a version mismatch
+        return summarize_call(started, False, error=last_error or "initialize failed")
+
+    session_headers = dict(post_headers)
+    session_id = response.headers.get("mcp-session-id", "")
+    if session_id:
+        session_headers["mcp-session-id"] = session_id
+    if negotiated:
+        session_headers["MCP-Protocol-Version"] = negotiated
+
+    await client.post(
+        url,
+        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+        headers=session_headers,
+    )
+    call_response = await client.post(
+        url,
+        json=_tools_call_body(tool_name, arguments),
+        headers=session_headers,
+    )
+    if call_response.status_code >= 400:
+        return summarize_call(
+            started, False,
+            error=f"tools/call failed: {status_hint(call_response.status_code)}",
+        )
+    call_message = parse_mcp_response(
+        call_response.text,
+        call_response.headers.get("content-type", ""),
+        expect_id=2,
+    )
+    return _call_result_summary(started, call_message, "tools/call")
+
+
+async def _call_tool_legacy_sse(
+    client, url: str, base_headers: dict, started: float,
+    tool_name: str, arguments: dict,
+) -> dict:
+    """tools/call over the legacy HTTP+SSE transport."""
+    frames: asyncio.Queue = asyncio.Queue()
+    reader: asyncio.Task | None = None
+    try:
+        async with client.stream(
+            "GET", url, headers={**base_headers, "Accept": "text/event-stream"}
+        ) as stream:
+            if stream.status_code >= 400:
+                return summarize_call(
+                    started, False,
+                    error=f"legacy SSE handshake failed: "
+                    f"{status_hint(stream.status_code)}",
+                )
+
+            async def read_stream() -> None:
+                try:
+                    async for line in stream.aiter_lines():
+                        await frames.put(line)
+                except Exception:  # noqa: BLE001 - stream ends abruptly
+                    pass
+                finally:
+                    await frames.put(None)
+
+            reader = asyncio.create_task(read_stream())
+            event = await _next_sse_event(frames)
+            if event is None or event[0] != "endpoint":
+                return summarize_call(
+                    started, False,
+                    error="legacy SSE stream never announced an endpoint event",
+                )
+            post_url = urljoin(url, event[1])
+            post_headers = {**base_headers, "Content-Type": "application/json"}
+            init_response = await client.post(
+                post_url,
+                json=_initialize_body(MCP_PROTOCOL_VERSIONS[-1]),
+                headers=post_headers,
+            )
+            if init_response.status_code >= 400:
+                return summarize_call(
+                    started, False,
+                    error=f"legacy SSE initialize failed: "
+                    f"{status_hint(init_response.status_code)}",
+                )
+            init_message = await _wait_for_rpc_response(frames, 1, CALL_TIMEOUT)
+            if init_message is None:
+                return summarize_call(
+                    started, False,
+                    error="no initialize response on the legacy SSE stream "
+                    "(timeout)",
+                )
+            if init_message.get("error"):
+                return summarize_call(
+                    started, False, error=_rpc_error(init_message, "initialize")
+                )
+            await client.post(
+                post_url,
+                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                headers=post_headers,
+            )
+            await client.post(
+                post_url,
+                json=_tools_call_body(tool_name, arguments),
+                headers=post_headers,
+            )
+            call_message = await _wait_for_rpc_response(frames, 2, CALL_TIMEOUT)
+            if call_message is None:
+                return summarize_call(
+                    started, False,
+                    error="no tools/call response on the legacy SSE stream "
+                    "(timeout)",
+                )
+            return _call_result_summary(started, call_message, "tools/call")
+    finally:
+        if reader is not None:
+            reader.cancel()
+
+
+async def call_tool(
+    url: str,
+    headers: dict | None = None,
+    tool_name: str = "",
+    arguments: dict | None = None,
+) -> dict:
+    """Call one tool on an MCP server (streamable HTTP, legacy SSE fallback).
+
+    Speaks the same transports as probe_mcp(), but performs tools/call with
+    user-supplied arguments - the console's tool tester. The result carries
+    the raw tool content so the UI can show exactly what the server answered.
+    """
+    started = time.time()
+    url = (url or "").strip()
+    tool_name = (tool_name or "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        return summarize_call(
+            started, False,
+            error=f"unsupported URL: {url or '(empty)'} - use http(s)://",
+        )
+    if not tool_name:
+        return summarize_call(started, False, error="tool name required")
+    if arguments is None:
+        arguments = {}
+    if not isinstance(arguments, dict):
+        return summarize_call(
+            started, False, error="arguments must be a JSON object"
+        )
+    base_headers = {
+        "Accept": "application/json, text/event-stream",
+        **(headers or {}),
+    }
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=CALL_TIMEOUT) as client:
+            try:
+                return await _call_tool_streamable(
+                    client, url, base_headers, started, tool_name, arguments
+                )
+            except NotStreamableEndpoint as streamable_error:
+                # fresh client/pool for the legacy transport (see probe_mcp)
+                async with httpx.AsyncClient(timeout=CALL_TIMEOUT) as legacy_client:
+                    legacy = await _call_tool_legacy_sse(
+                        legacy_client, url, base_headers, started,
+                        tool_name, arguments,
+                    )
+                if legacy["ok"]:
+                    legacy["error"] = (
+                        legacy["error"]
+                        or "called via the legacy SSE transport"
+                    )
+                    return legacy
+                return summarize_call(
+                    started, False,
+                    error=f"streamable HTTP: {streamable_error}; "
+                    f"legacy SSE: {legacy['error'] or 'no response'}",
+                )
+    except Exception as exc:  # noqa: BLE001 - report any call failure
+        return summarize_call(started, False, error=_network_error_text(exc))
 
 
 async def probe_livekit(env: dict) -> dict:

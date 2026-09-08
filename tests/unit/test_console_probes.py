@@ -71,9 +71,34 @@ def test_extract_tool_names_and_server_info():
     assert probes.extract_server_info({}) == {}
 
 
+def test_extract_tools_details():
+    tools = probes.extract_tools(
+        {"tools": [
+            {"name": "a", "description": "do a",
+             "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "b"},
+            "junk",
+            {"nope": 1},
+        ]}
+    )
+    assert tools == [
+        {"name": "a", "description": "do a",
+         "input_schema": {"type": "object", "properties": {}}},
+        {"name": "b"},
+    ]
+    assert probes.extract_tools({}) == []
+    # names stay available alongside the details
+    assert probes.extract_tool_names(
+        {"tools": [{"name": "a", "description": "x"}]}
+    ) == ["a"]
+
+
 def test_summarize_probe_shape():
-    result = probes.summarize_probe(time.time(), True, tools=["x"])
+    result = probes.summarize_probe(
+        time.time(), True, tools=["x"], tool_details=[{"name": "x"}]
+    )
     assert result["ok"] is True and result["tools"] == ["x"]
+    assert result["tool_details"] == [{"name": "x"}]
     assert result["error"] == ""
     assert result["server_info"] == {}
     assert result["protocol_version"] == ""
@@ -166,8 +191,31 @@ class StreamableJSONHandler(BaseHTTPRequestHandler):
         if method == "tools/list":
             return self._json(200, {
                 "jsonrpc": "2.0", "id": 2,
-                "result": {"tools": [{"name": "lights_on"}, {"name": "weather"}]},
+                "result": {"tools": [
+                    {
+                        "name": "lights_on",
+                        "description": "Turn the lights on",
+                        "inputSchema": {
+                            "type": "object",
+                            "required": ["room"],
+                            "properties": {"room": {"type": "string"}},
+                        },
+                    },
+                    {"name": "weather"},
+                ]},
             })
+        if method == "tools/call":
+            params = body.get("params") or {}
+            room = (params.get("arguments") or {}).get("room", "?")
+            result = {
+                "jsonrpc": "2.0", "id": body.get("id") or 2,
+                "result": {"content": [
+                    {"type": "text", "text": f"lights are on in {room}"}
+                ]},
+            }
+            if params.get("name") == "explode":
+                result["result"]["isError"] = True
+            return self._json(200, result)
         return self._json(202, None)  # notification
 
     def _json(self, status: int, payload) -> None:
@@ -246,6 +294,13 @@ class LegacySSEHandler(BaseHTTPRequestHandler):
                     "protocolVersion": "2024-11-05",
                     "serverInfo": {"name": "legacy-sse", "version": "0.9"},
                 },
+            }
+        elif body.get("method") == "tools/call":
+            response = {
+                "jsonrpc": "2.0", "id": body.get("id") or 2,
+                "result": {"content": [
+                    {"type": "text", "text": "legacy tool ran"}
+                ]},
             }
         elif body.get("id") == 2:
             response = {
@@ -370,3 +425,74 @@ def test_probe_reports_connection_failures():
     assert result["tools"] == []
     bad = probe("ftp://nope")
     assert bad["ok"] is False and "unsupported URL" in bad["error"]
+
+
+# ---------------------------------------------------------------------------
+# tool calls (console tool tester)
+# ---------------------------------------------------------------------------
+def call(url: str, headers: dict | None = None, tool: str = "", args=None) -> dict:
+    return asyncio.run(probes.call_tool(url, headers, tool, args))
+
+
+def test_call_tool_validates_input():
+    bad = call("ftp://nope", None, "t")
+    assert bad["ok"] is False and "unsupported URL" in bad["error"]
+    missing = call("http://127.0.0.1:1/mcp", None, "  ")
+    assert missing["ok"] is False and "tool name required" in missing["error"]
+    not_object = call("http://127.0.0.1:1/mcp", None, "t", [1, 2])
+    assert not_object["ok"] is False and "JSON object" in not_object["error"]
+
+
+def test_call_tool_streamable_json_sends_auth_headers():
+    require_real_httpx()
+    server = run_mcp_server(StreamableJSONHandler)
+    try:
+        url = server_url(server)
+        # regression: without the configured headers a healthy server fails
+        failed = call(url, None, "lights_on", {"room": "kitchen"})
+        assert failed["ok"] is False
+        assert "401" in failed["error"] and "Authorization" in failed["error"]
+        result = call(
+            url, {"Authorization": "Bearer secret-token"},
+            "lights_on", {"room": "kitchen"},
+        )
+        assert result["ok"] is True, result["error"]
+        assert result["content"] == [
+            {"type": "text", "text": "lights are on in kitchen"}
+        ]
+        assert result["is_error"] is False
+        assert result["structured_content"] is None
+        assert result["latency_ms"] >= 0
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_call_tool_reports_tool_error_results():
+    require_real_httpx()
+    server = run_mcp_server(StreamableJSONHandler)
+    try:
+        result = call(
+            server_url(server), {"Authorization": "Bearer secret-token"},
+            "explode", {},
+        )
+        # the RPC itself worked, but the tool reported an error result
+        assert result["ok"] is True
+        assert result["is_error"] is True
+        assert result["error"] == "the tool reported an error result"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_call_tool_falls_back_to_legacy_sse():
+    require_real_httpx()
+    server = run_mcp_server(LegacySSEHandler)
+    try:
+        result = call(server_url(server, "/sse"), None, "legacy_tool", {})
+        assert result["ok"] is True, result["error"]
+        assert result["content"] == [{"type": "text", "text": "legacy tool ran"}]
+        assert "legacy SSE" in result["error"]
+    finally:
+        server.shutdown()
+        server.server_close()

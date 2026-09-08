@@ -105,13 +105,18 @@ def test_normalize_ui_mcp_list():
         [
             {"id": "weather", "url": "http://w:9000/mcp"},
             {"url": "http://x/mcp", "enabled": "false"},
+            {"id": "ha", "url": "http://y/mcp",
+             "disabled_tools": ["set_temperature", " ", "set_temperature"]},
         ]
     )
     assert servers[0] == {
         "id": "weather", "url": "http://w:9000/mcp", "headers": {}, "enabled": True,
+        "disabled_tools": [],
     }
     assert servers[1]["id"] == "mcp-2"
     assert servers[1]["enabled"] is False
+    # tool names are trimmed and deduplicated, order preserved
+    assert servers[2]["disabled_tools"] == ["set_temperature"]
 
     import pytest
 
@@ -123,6 +128,36 @@ def test_normalize_ui_mcp_list():
         )
     with pytest.raises(ValueError):
         sc.normalize_ui_mcp_list("not-a-list")
+    with pytest.raises(ValueError):
+        sc.normalize_ui_mcp_list(
+            [{"id": "a", "url": "http://a", "disabled_tools": {"not": "a list"}}]
+        )
+    assert sc.normalize_disabled_tools(None) == []
+    assert sc.normalize_disabled_tools("one_tool") == ["one_tool"]
+    assert sc.normalize_disabled_tools(["b", "a", "b"]) == ["b", "a"]
+
+
+def test_merge_masked_headers_keeps_stored_secrets():
+    stored = sc.normalize_ui_mcp_list(
+        [{"id": "w", "url": "http://w/mcp",
+          "headers": {"Authorization": "Bearer real-token"}}]
+    )
+    masked = sc.mask_secret("Bearer real-token")
+    incoming = sc.normalize_ui_mcp_list(
+        [{"id": "w", "url": "http://w/mcp",
+          "headers": {"Authorization": masked, "X-Other": "new"}}]
+    )
+    merged = sc.merge_masked_headers(incoming, stored)
+    assert merged[0]["headers"]["Authorization"] == "Bearer real-token"
+    assert merged[0]["headers"]["X-Other"] == "new"
+    # a genuinely new value is stored as-is
+    changed = sc.normalize_ui_mcp_list(
+        [{"id": "w", "url": "http://w/mcp",
+          "headers": {"Authorization": "Bearer rotated"}}]
+    )
+    assert sc.merge_masked_headers(changed, stored)[0]["headers"][
+        "Authorization"
+    ] == "Bearer rotated"
 
 
 def test_env_mcp_servers_and_merged_view():
@@ -135,7 +170,8 @@ def test_env_mcp_servers_and_merged_view():
     }
     ui_list = sc.normalize_ui_mcp_list(
         [{"id": "weather", "url": "http://ui-weather/mcp"},
-         {"id": "music", "url": "http://music/mcp", "enabled": False}]
+         {"id": "music", "url": "http://music/mcp", "enabled": False,
+          "disabled_tools": ["radio_off"]}]
     )
     view = {}
     for server in sc.merged_mcp_view(ui_list, sc.env_mcp_servers(env), env):
@@ -153,6 +189,10 @@ def test_env_mcp_servers_and_merged_view():
     assert flagged == {"weather": True, "music": False, "home-assistant": True}
     # header values are masked for display
     assert view["home-assistant"]["headers"]["Authorization"].endswith("***")
+    # per-server tool switches are part of the view (env/HA: none disabled)
+    by_id = {s["id"]: s for s in all_servers}
+    assert by_id["music"]["disabled_tools"] == ["radio_off"]
+    assert by_id["home-assistant"]["disabled_tools"] == []
 
 
 def test_language_is_normalized_like_the_agent():
@@ -169,12 +209,20 @@ def test_language_is_normalized_like_the_agent():
 def test_agent_runtime_payload():
     env = base_env() | {"LANGUAGE": "en"}
     stored = {"transcripts_enabled": "true"}
-    ui_list = sc.normalize_ui_mcp_list([{"id": "weather", "url": "http://w/mcp"}])
+    ui_list = sc.normalize_ui_mcp_list(
+        [{"id": "weather", "url": "http://w/mcp", "disabled_tools": ["rain"]}]
+    )
     payload = sc.agent_runtime_payload(env, stored, ui_list, version=7)
     assert payload["version"] == 7
     assert payload["transcripts_enabled"] is True
     assert payload["settings"]["language"] == "en"
     assert payload["settings"]["llm_model"] == "gpt-4.1-mini"
+    # disabled tools travel with the server so the agent can filter them
     assert payload["mcp_servers"] == [
-        {"id": "weather", "url": "http://w/mcp", "headers": {}}
+        {
+            "id": "weather",
+            "url": "http://w/mcp",
+            "headers": {},
+            "disabled_tools": ["rain"],
+        }
     ]

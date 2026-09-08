@@ -66,6 +66,8 @@ class MCPServerSpec:
     id: str
     url: str
     headers: dict[str, str] = field(default_factory=dict)
+    # tools hidden from the assistant (per-tool toggles in the web console)
+    disabled_tools: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -317,6 +319,16 @@ def apply_overrides(base: AgentSettings, payload: dict) -> AgentSettings:
                         str(k): str(v)
                         for k, v in (entry.get("headers") or {}).items()
                     },
+                    disabled_tools=tuple(
+                        dict.fromkeys(
+                            name
+                            for name in (
+                                str(item).strip()
+                                for item in (entry.get("disabled_tools") or [])
+                            )
+                            if name
+                        )
+                    ),
                 )
             )
         except (KeyError, TypeError, ValueError):

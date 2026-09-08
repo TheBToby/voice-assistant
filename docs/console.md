@@ -9,9 +9,9 @@ What it gives you:
 
 | Tab | Purpose |
 |---|---|
-| **Dashboard** | Connectivity at a glance: LiveKit server, agent worker heartbeat, MCP server probes (with discovered tools), provider key status, audit log size |
+| **Dashboard** | Connectivity at a glance: LiveKit server, agent worker heartbeat, MCP server status (name, URL, reachability), provider key status, audit log size |
 | **Devices** | Every device identity ever seen (reSpeaker, browsers): friendly names, online state (from the LiveKit server), rooms, last seen, session counts; mint access tokens |
-| **MCP Servers** | Add / edit / enable / remove MCP servers at runtime - no `.env` edit, no restart; a **Test** button probes each server and lists its tools |
+| **MCP Servers** | Add / edit / enable / remove MCP servers at runtime - no `.env` edit, no restart; per-server details (protocol version, server name, latency) with the tools each server offers, per-tool enable/disable switches, and a **tool tester** for calling tools with typed requests |
 | **Settings** | All non-fundamental settings (persona, models, Home Assistant, diagnostics retention) with env defaults + stored overrides |
 | **Audit Log** | Interaction trail (sessions, tools, timers, logins, config changes), filterable, exportable (CSV/JSON), retention configurable in days |
 | **Talk** | The browser test client: one click mints a token server-side and joins the default room |
@@ -72,19 +72,35 @@ The **MCP Servers** tab manages the same registry that `MCP_SERVERS_JSON`
 used to own, plus Home Assistant:
 
 - UI-managed entries can be added, edited, enabled/disabled and removed at
-  runtime. **Test** performs a real MCP handshake (`initialize` +
+  runtime. **Test connection** performs a real MCP handshake (`initialize` +
   `tools/list`) and shows the discovered tools, latency, server name and
   negotiated protocol version.
+- Every server is a collapsible card. Expanding it shows the connection
+  details (URL, negotiated protocol version, server name/version, latency,
+  last probe error) and a full **tools overview** with name and description
+  per tool - for console-managed and environment-defined servers alike.
+  Expanding a card without probe data probes the server automatically.
+- **Per-tool switches**: each tool of a console-managed server can be
+  disabled individually; disabled tools are stored with the server
+  configuration and the agent hides them from the assistant at session
+  start (apply to new sessions after saving).
+- **Tool tester**: pick a server and one of its tools, type the request
+  arguments as JSON (a scaffold is generated from the tool's input schema)
+  and run it against the real server - the raw response is shown below.
+  Calls are recorded in the audit trail as `tool.call` events with
+  `source: console`.
 - Entries from `MCP_SERVERS_JSON` (env) and the Home Assistant integration
-  are listed read-only. A UI entry with the same id **overrides** them
-  (first definition wins - the same rule the agent applies).
+  are listed read-only (their tools still show up in the overview). A UI
+  entry with the same id **overrides** them (first definition wins - the
+  same rule the agent applies).
 
 > The console's probe speaks streamable HTTP (JSON and SSE responses,
 > offering all current MCP protocol versions) and falls back to the legacy
 > HTTP+SSE transport - the same transports the agent accepts. Auth headers
 > configured for a server are sent along, so servers like the Home
 > Assistant MCP integration (401 without a Bearer token) are diagnosed
-> correctly instead of showing up as failed.
+> correctly instead of showing up as failed. The tool tester resolves
+> configured servers by id server-side, so secrets never reach the browser.
 
 ## Diagnostics & audit trail
 
