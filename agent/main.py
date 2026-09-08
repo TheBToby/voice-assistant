@@ -179,15 +179,104 @@ def build_session(settings: AgentSettings) -> AgentSession:
     )
 
 
+_TURN_DETECTOR_OFF = ("0", "false", "no", "off")
+
+
+def _prepare_turn_detector() -> None:
+    """Register the turn-detector model runners in the main worker process.
+
+    MUST run in the main process before ``cli.run_app()``: livekit-agents
+    only spawns the dedicated inference process (hosting the ONNX
+    end-of-utterance model) when at least one ``InferenceRunner`` has been
+    registered there - and that happens when the plugin module is imported.
+    Importing it from the job entrypoint (where ``build_session`` runs) is
+    too late: the worker then has no inference executor and every
+    end-of-turn prediction fails with "no inference executor", silently
+    degrading turn detection to plain VAD endpointing.
+
+    Both the English and the multilingual model are registered (~66 MB +
+    ~396 MB q8 ONNX in the inference process), so the assistant language
+    can also be switched at runtime via the console.
+
+    The inference process opens the model files with ``local_files_only``
+    - they are therefore pre-downloaded into the shared HF cache (the
+    model-cache volume) here. Cached files make this a no-op, so offline
+    restarts keep working. If the models cannot be prepared, the turn
+    detector stays disabled for this worker run and sessions fall back to
+    VAD endpointing instead of crash-looping the worker.
+    """
+    if os.getenv("ENABLE_TURN_DETECTOR", "true").strip().lower() in _TURN_DETECTOR_OFF:
+        logger.info(
+            "turn detector disabled (ENABLE_TURN_DETECTOR); using VAD endpointing"
+        )
+        return
+    try:
+        # importing the package registers the English + multilingual
+        # InferenceRunners in this (main worker) process
+        import livekit.plugins.turn_detector  # noqa: F401
+        from livekit.plugins.turn_detector.english import _EUORunnerEn
+        from livekit.plugins.turn_detector.models import HG_MODEL, ONNX_FILENAME
+        from livekit.plugins.turn_detector.multilingual import (
+            _EUORunnerMultilingual,
+        )
+
+        def _files_cached(runner_cls) -> bool:  # noqa: ANN001
+            from huggingface_hub import hf_hub_download
+
+            try:
+                hf_hub_download(
+                    HG_MODEL,
+                    ONNX_FILENAME,
+                    subfolder="onnx",
+                    revision=runner_cls.model_revision(),
+                    local_files_only=True,
+                )
+                hf_hub_download(
+                    HG_MODEL,
+                    "languages.json",
+                    revision=runner_cls.model_revision(),
+                    local_files_only=True,
+                )
+                return True
+            except Exception:  # noqa: BLE001 - not cached yet
+                return False
+
+        for runner_cls in (_EUORunnerEn, _EUORunnerMultilingual):
+            if not _files_cached(runner_cls):
+                logger.info(
+                    "downloading turn detector model (%s)...",
+                    runner_cls.model_revision(),
+                )
+                runner_cls._download_files()  # noqa: SLF001 - pinned plugin API
+
+        # job processes check this flag (inherited environment) and skip
+        # the model entirely when it could not be made available
+        os.environ["TURN_DETECTOR_AVAILABLE"] = "1"
+        logger.info("turn detector models ready (english + multilingual)")
+    except Exception:  # noqa: BLE001 - never block the worker on the EOU model
+        logger.warning(
+            "turn detector models could not be prepared - falling back to "
+            "VAD endpointing (check network access to huggingface.co)",
+            exc_info=True,
+        )
+
+
 def _build_turn_detector(settings: AgentSettings):
     """Pick the turn detector matching the configured language.
 
     English uses the dedicated English model, German the multilingual model
-    (both ship with the turn-detector extra; the multilingual model also
-    understands more languages if ever needed). Any other language falls
-    back to VAD endpointing. Set ENABLE_TURN_DETECTOR=false to skip the
-    model downloads entirely.
+    (the multilingual model also understands more languages if ever
+    needed). Any other language falls back to VAD endpointing.
+
+    The models run in the worker's dedicated inference process, which only
+    exists when `_prepare_turn_detector` registered the model runners in
+    the main worker process (TURN_DETECTOR_AVAILABLE is set accordingly) -
+    without it every end-of-turn prediction would fail with "no inference
+    executor".
     """
+    if not os.getenv("TURN_DETECTOR_AVAILABLE"):
+        logger.info("turn detector not available; using VAD endpointing")
+        return None
     lang = settings.language
     try:
         if lang == "de":
@@ -198,7 +287,7 @@ def _build_turn_detector(settings: AgentSettings):
             from livekit.plugins.turn_detector.english import EnglishModel
 
             return EnglishModel()
-    except Exception:  # noqa: BLE001 - fall back to STT endpointing
+    except Exception:  # noqa: BLE001 - fall back to VAD endpointing
         logger.warning(
             "turn detector unavailable, falling back to VAD endpointing",
             exc_info=True,
@@ -308,6 +397,11 @@ def main() -> None:
     # info and higher, and logged as DEBUG with LOG_LEVEL=debug (see
     # log_filters.py).
     log_filters.install()
+
+    # register the turn-detector runners + pre-download the model files in
+    # THIS (main worker) process - see the docstring for why this must not
+    # happen inside the job entrypoint
+    _prepare_turn_detector()
 
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
 

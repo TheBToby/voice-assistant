@@ -59,13 +59,19 @@ Key behaviors:
   devices can blink LEDs / show UI.
 - **MCP**: servers are resolved at session start from the environment
   (`HOME_ASSISTANT_URL`/`TOKEN`, generic `MCP_SERVERS_JSON` — e.g. a weather
-  server) into `mcp.MCPToolset` entries, using `MCPServerHTTP` (streamable
-  HTTP / SSE) with per-server headers. A failing MCP server logs an error but
+  server or an Obot gateway) into `mcp.MCPToolset` entries, using
+  `MCPServerHTTP` with per-server headers and an auto-detected transport
+  (streamable HTTP by default, legacy SSE only for URLs ending in `/sse`;
+  per-server `transport` override). A failing MCP server logs an error but
   does not prevent the agent from starting.
 - **Language**: `LANGUAGE` (default `de`) drives the system prompt, the
   ElevenLabs STT/TTS language, the built-in skill strings (`agent/i18n.py`)
   and the turn-detector choice (English model for `en`, multilingual model
-  for `de`, VAD-only endpointing otherwise).
+  for `de`, VAD-only endpointing otherwise). The turn-detector ONNX models
+  run in a dedicated worker inference process: `agent/main.py` registers
+  the model runners in the main worker process and pre-downloads the model
+  files at startup (model-cache volume) — without that registration every
+  end-of-turn prediction fails with "no inference executor".
 
 ## Component choices (verification result)
 
