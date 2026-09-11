@@ -76,24 +76,33 @@ static void session_open(void)
     led_ring_set_state(LED_RING_STATE_WAKE);
     chime_play(CHIME_WAKE);
 
-    // Pin the AEC fixed beam to the direction the wake word came from so the
-    // published signal keeps isolating that speaker. Prefer the cached
-    // azimuth from the periodic poll (at most one poll interval old).
+    // Diagnostics: dump every AEC azimuth slot. While a previous beam lock
+    // is still on, slot 0/1 carry the pinned direction and slot 3 (auto)
+    // keeps jumping between sources - matching the reference driver, which
+    // displays slot 0 while locked and slot 3 otherwise.
+    float az[4];
+    if (xvf3800_read_azimuth_all(az) == ESP_OK) {
+        ESP_LOGI(TAG, "azimuths at wake (deg): fixed1=%.0f fixed2=%.0f free=%.0f auto=%.0f%s",
+                 az[0] * 180.0f / (float)M_PI, az[1] * 180.0f / (float)M_PI,
+                 az[2] * 180.0f / (float)M_PI, az[3] * 180.0f / (float)M_PI,
+                 xvf3800_beam_is_locked() ? " (lock still on!)" : "");
+    }
+
+#if CONFIG_LK_BEAM_LOCK
+    // Pin the AEC fixed beam to the direction the wake word came from so
+    // the published signal keeps isolating that speaker. Only lock with a
+    // FRESH direction (reference: <= 500 ms old poll value) - locking onto
+    // a stale or chime-echo-corrupted azimuth steers the beam away from the
+    // speaker and the agent never hears the command.
     if (s_sess.azimuth_valid &&
         (s_sess.started_ms - s_sess.last_azimuth_ms) <= BEAM_FRESH_MS) {
         xvf3800_beam_lock(s_sess.azimuth_rad);
     } else {
-        float az;
-        if (xvf3800_read_azimuth(&az, XVF3800_BEAM_AUTO) == ESP_OK) {
-            s_sess.azimuth_rad = az;
-            s_sess.last_azimuth_ms = s_sess.started_ms;
-            s_sess.azimuth_valid = true;
-            xvf3800_beam_lock(az);
-        } else {
-            ESP_LOGD(TAG, "No fresh azimuth - beam stays adaptive");
-            led_ring_clear_beam();
-        }
+        ESP_LOGI(TAG, "No fresh azimuth (%s) - beam stays adaptive",
+                 s_sess.azimuth_valid ? "stale" : "none yet");
+        led_ring_clear_beam();
     }
+#endif
 
 #if CONFIG_LK_WAKE_WORD && CONFIG_LK_WAKE_WORD_GATE
     mic_source_set_gate(true);
@@ -118,8 +127,8 @@ static void session_close(void)
     wake_word_set_armed(true);
     led_ring_set_state(local_timers_is_ringing() ? LED_RING_STATE_TIMER
                                                  : LED_RING_STATE_IDLE);
-    ESP_LOGI(TAG, "Session closed (%.1f s)",
-             (now_ms() - s_sess.started_ms) / 1000.0);
+    ESP_LOGI(TAG, "Session closed after %.1f s (speech seen: %d)",
+             (now_ms() - s_sess.started_ms) / 1000.0, s_sess.speech_seen);
 }
 
 // Called from the WakeNet fetch task; keep it short - the heavy lifting
@@ -148,12 +157,12 @@ static void session_task(void *arg)
             evt == SESSION_EVT_WAKE) {
             if (!s_sess.active) {
                 if (local_timers_is_ringing()) {
-                    // Wake word stops the ring first ("stop the timer").
+                    // Reference flow: a wake word while the timer rings only
+                    // stops the ring - the user wakes again for a command.
                     local_timers_ring_stop();
                     example_publish_event(
                         "{\"event\":\"timer_ring_stopped\",\"reason\":\"wake_word\"}");
-                }
-                if (s_sess.room_connected) {
+                } else if (s_sess.room_connected) {
                     session_open();
                 } else {
                     ESP_LOGW(TAG, "Wake word ignored - room not connected");
@@ -162,30 +171,43 @@ static void session_task(void *arg)
             }
         }
 
-        // Track speech + direction while a session is open.
+        // Direction tracking: always poll (10 Hz), like the reference's
+        // always-on beam sensor - this keeps a fresh pre-wake direction for
+        // the beam lock and the ring display. While the beam is locked the
+        // auto-select slot jumps between sources, so display the pinned
+        // fixed-beam slot instead (reference read_led_beam_direction).
+        if (++azimuth_divider >= AZIMUTH_POLL_MS / SESSION_TICK_MS) {
+            azimuth_divider = 0;
+            float az;
+            xvf3800_beam_t slot = xvf3800_beam_is_locked()
+                                      ? XVF3800_BEAM_FIXED_1
+                                      : XVF3800_BEAM_AUTO;
+            if (xvf3800_read_azimuth(&az, slot) == ESP_OK) {
+                s_sess.azimuth_rad = az;
+                s_sess.last_azimuth_ms = now_ms();
+                s_sess.azimuth_valid = true;
+                led_ring_set_beam_deg(az * 180.0f / (float)M_PI);
+            }
+        }
+
+        // Track speech + session lifetime while a session is open.
         if (s_sess.active) {
             const int64_t now = now_ms();
             if (wake_word_ms_since_speech() < (uint32_t)(2 * SESSION_TICK_MS)) {
                 s_sess.last_speech_ms = now;
                 s_sess.speech_seen = true;
             }
-            if (++azimuth_divider >= AZIMUTH_POLL_MS / SESSION_TICK_MS) {
-                azimuth_divider = 0;
-                float az;
-                if (xvf3800_read_azimuth(&az, XVF3800_BEAM_AUTO) == ESP_OK) {
-                    s_sess.azimuth_rad = az;
-                    s_sess.last_azimuth_ms = now;
-                    s_sess.azimuth_valid = true;
-                    led_ring_set_beam_deg(az * 180.0f / (float)M_PI);
-                }
-            }
 
             const bool silence_after_speech =
                 s_sess.speech_seen &&
                 (now - s_sess.last_speech_ms) > CONFIG_LK_SESSION_SILENCE_MS;
+            const bool never_spoke =
+                !s_sess.speech_seen &&
+                (now - s_sess.started_ms) > CONFIG_LK_SESSION_NO_SPEECH_MS;
             const bool too_long =
                 (now - s_sess.started_ms) > CONFIG_LK_SESSION_MAX_MS;
-            if (silence_after_speech || too_long || !s_sess.room_connected) {
+            if (silence_after_speech || never_spoke || too_long ||
+                !s_sess.room_connected) {
                 session_close();
             }
         } else if (local_timers_is_ringing() &&

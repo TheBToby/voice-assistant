@@ -23,6 +23,7 @@ typedef struct {
     int id;
     char name[40];
     int64_t expire_at_ms;
+    float total_s;   // original duration, for the LED countdown bar
     bool active;
 } local_timer_t;
 
@@ -75,15 +76,17 @@ static void ring_begin(void)
     led_ring_set_state(LED_RING_STATE_TIMER);
 }
 
-// Watchdog: expires mirrored timers and starts the ring as soon as the
-// device is idle. The ring itself (repeats + total timeout) lives in the
-// chime task; stopping is driven by voice_session.c on wake word / speech.
+// Watchdog: expires mirrored timers, publishes the countdown progress for
+// the LED ring's timer_tick bar, and starts the ring as soon as the device
+// is idle. The ring itself (repeats + total timeout) lives in the chime
+// task; stopping is driven by voice_session.c on wake word / speech.
 static void timers_task(void *arg)
 {
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(200));
         const int64_t now = now_ms();
         bool expired = false;
+        float min_ratio = 0.0f;
 
         xSemaphoreTake(s_t.lock, portMAX_DELAY);
         for (int i = 0; i < MAX_TIMERS; i++) {
@@ -92,6 +95,14 @@ static void timers_task(void *arg)
                 ESP_LOGI(TAG, "Timer '%s' (id %d) expired locally", t->name, t->id);
                 t->active = false;
                 expired = true;
+                continue;
+            }
+            if (t->active && t->total_s > 0.0f) {
+                float left = (float)((t->expire_at_ms - now) / 1000);
+                float ratio = left / t->total_s;
+                if (ratio > min_ratio) {
+                    min_ratio = ratio; // bar shows the longest-running timer
+                }
             }
         }
         xSemaphoreGive(s_t.lock);
@@ -109,6 +120,9 @@ static void timers_task(void *arg)
             s_t.ring_started = true;
             ring_begin();
         }
+        // Idle countdown bar (reference timer_tick effect).
+        led_ring_set_timer_progress(
+            (s_t.ring_pending || s_t.ring_started) ? 0.0f : min_ratio);
     }
 }
 
@@ -139,6 +153,7 @@ void local_timers_on_agent_event(const char *event, int id,
         t->id = id;
         t->active = true;
         t->expire_at_ms = now_ms() + (int64_t)(duration_s * 1000.0f);
+        t->total_s = duration_s;
         snprintf(t->name, sizeof(t->name), "%s", name ? name : "timer");
         xSemaphoreGive(s_t.lock);
         ESP_LOGI(TAG, "Timer '%s' (%.0f s) tracked locally", t->name, duration_s);

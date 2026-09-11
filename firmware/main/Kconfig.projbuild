@@ -94,14 +94,17 @@ menu "Voice Assistant Features"
 
         config LK_WAKE_WORD_THRESHOLD_PERMILLE
             int "Wake word detection threshold (permille)"
-            default 500
+            default 700
             range 100 900
             depends on LK_WAKE_WORD
             help
                 WakeNet detection threshold (0.1 = very sensitive, 0.9 =
-                very strict). 0.5 is a balanced default. Raise it if the
-                device wakes up spuriously (e.g. from TV audio), lower it
-                if wake-ups are missed.
+                very strict). The TTS-synthesized models (Hey Willow,
+                Jarvis, ...) have their native operating point around
+                0.65 - 0.7; 0.7 keeps false accepts in a normal living
+                room down while real wake words still fire. Raise it if
+                the device still wakes spuriously (TV audio), lower it if
+                wake-ups are missed.
 
         config LK_WAKE_WORD_AFE_HIGH_PERF
             bool "High-performance AFE mode"
@@ -116,6 +119,16 @@ menu "Voice Assistant Features"
 
     menu "Voice session"
 
+        config LK_BEAM_LOCK
+            bool "Lock the XMOS beam to the wake-word direction"
+            default y
+            help
+                Pins the AEC fixed beams to the speaker direction detected
+                at the wake word and releases them at the end of the
+                utterance, so the published signal keeps isolating that
+                speaker. The lock only engages with a fresh (< 500 ms)
+                direction sample. Disable if it degrades the mic level.
+
         config LK_SESSION_SILENCE_MS
             int "End-of-utterance silence timeout (ms)"
             default 1500
@@ -123,6 +136,15 @@ menu "Voice Assistant Features"
             help
                 After the wake word, the session (and the publish gate)
                 closes once this much silence follows detected speech.
+
+        config LK_SESSION_NO_SPEECH_MS
+            int "Session timeout without any speech (ms)"
+            default 5000
+            range 1000 30000
+            help
+                Closes the session when no speech was detected at all in
+                this window - e.g. after a spurious wake word - instead of
+                holding the publish gate open for the full session cap.
 
         config LK_SESSION_MAX_MS
             int "Maximum session duration (ms)"
@@ -200,15 +222,25 @@ menu "Voice Assistant Features"
             bool "Enable LED ring effects"
             default y
             help
-                Drives the 12-LED ring over the XMOS control port: idle
-                breathing, wake spin, beam direction while listening,
-                agent-state effects (thinking/speaking) and timer blink.
+                Drives the 12-LED ring over the XMOS control port with the
+                reference project's animations: solid user color while
+                idle, beam direction while listening, breathe while
+                thinking, counter-clockwise comet while the agent speaks,
+                red breathe on errors and a countdown bar for timers.
 
         config LK_LED_BRIGHTNESS_PERCENT
             int "Master brightness (percent)"
-            default 40
+            default 80
             range 5 100
             depends on LK_LEDS
+
+        config LK_LED_COLOR
+            hex "User ring color (RGB)"
+            default 0xFF00FF
+            depends on LK_LEDS
+            help
+                The single accent color of every phase, like the
+                reference's user LED ring color (default magenta).
 
     endmenu
 

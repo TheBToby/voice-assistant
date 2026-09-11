@@ -64,6 +64,10 @@ esp_err_t xvf3800_set_led_ring(const uint32_t colors[XVF3800_LED_COUNT]);
 /// Single attempt: returns ESP_ERR_NOT_FOUND on WAIT/RETRY (no fresh data).
 esp_err_t xvf3800_read_azimuth(float *azimuth_rad, xvf3800_beam_t beam);
 
+/// Read all four AEC azimuth slots in one transaction (radians):
+/// [fixed 1, fixed 2, free-running, auto-select]. Diagnostics helper.
+esp_err_t xvf3800_read_azimuth_all(float azimuth_rad[4]);
+
 /// Pin the AEC fixed beams to `azimuth_rad` and enable fixed-beam mode, so
 /// the published mic signal keeps pointing at the speaker that triggered the
 /// wake word. Call `xvf3800_beam_unlock()` at the end of the utterance.

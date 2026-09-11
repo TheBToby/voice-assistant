@@ -61,3 +61,6 @@ CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK=y
 # Wake word model packed into the 'model' partition (partitions.csv).
 CONFIG_SR_WN_WN9_HEYWILLOW_TTS=y
 CONFIG_MODEL_IN_FLASH=y
+# Wake word sensitivity: TTS models run natively around 0.65; 0.7 cuts the
+# false accepts seen at 0.5 in a normal living room.
+CONFIG_LK_WAKE_WORD_THRESHOLD_PERMILLE=700

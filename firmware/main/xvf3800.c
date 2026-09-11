@@ -245,12 +245,12 @@ esp_err_t xvf3800_set_led_ring(const uint32_t colors[XVF3800_LED_COUNT])
     return err;
 }
 
-esp_err_t xvf3800_read_azimuth(float *azimuth_rad, xvf3800_beam_t beam)
+esp_err_t xvf3800_read_azimuth_all(float azimuth_rad[4])
 {
     if (!s_xvf.ready) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (azimuth_rad == NULL || beam > XVF3800_BEAM_AUTO) {
+    if (azimuth_rad == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -264,12 +264,22 @@ esp_err_t xvf3800_read_azimuth(float *azimuth_rad, xvf3800_beam_t beam)
         return err;
     }
     if (resp[0] != XMOS_STATUS_DONE) {
-        // WAIT/RETRY is normal while the DSP has no sound source to localize.
         return ESP_ERR_NOT_FOUND;
     }
-    float radians;
-    memcpy(&radians, &resp[1 + (int)beam * sizeof(float)], sizeof(float));
-    *azimuth_rad = radians;
+    for (int i = 0; i < 4; i++) {
+        memcpy(&azimuth_rad[i], &resp[1 + i * (int)sizeof(float)], sizeof(float));
+    }
+    return ESP_OK;
+}
+
+esp_err_t xvf3800_read_azimuth(float *azimuth_rad, xvf3800_beam_t beam)
+{
+    float all[4];
+    esp_err_t err = xvf3800_read_azimuth_all(all);
+    if (err != ESP_OK) {
+        return err;
+    }
+    *azimuth_rad = all[(int)beam];
     return ESP_OK;
 }
 
