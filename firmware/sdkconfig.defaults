@@ -13,7 +13,7 @@ CONFIG_LK_EXAMPLE_USE_WIFI=y
 CONFIG_LK_EXAMPLE_WIFI_SSID="Mikrowelle_IoT"
 CONFIG_LK_EXAMPLE_WIFI_PASSWORD="IoT@Baechtold#4410"
 CONFIG_LK_EXAMPLE_SERVER_URL="ws://192.168.0.29:7880"
-CONFIG_LK_EXAMPLE_TOKEN="PASTE_TOKEN_HERE"
+CONFIG_LK_EXAMPLE_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYW1lIjoicmVTcGVha2VyIiwidmlkZW8iOnsicm9vbUpvaW4iOnRydWUsInJvb20iOiJob21lIiwiY2FuUHVibGlzaCI6dHJ1ZSwiY2FuU3Vic2NyaWJlIjp0cnVlLCJjYW5QdWJsaXNoRGF0YSI6dHJ1ZX0sInN1YiI6InJlU3BlYWtlciIsImlzcyI6IkdLNTVXcWFLZmY0NjRIc1I2aEVBUDZxZWRTRFBER3ltIiwibmJmIjoxNzg4NzYyMDQyLCJleHAiOjE3ODg4MDUyNDJ9.3y_bXqOOXfIHRW2tuUMjcOI_ZEXxghA1Mz2Wb3UV0sE"
 
 # ---------------------------------------------------------------------------
 # Console: the XVF3800 I2S data pins are GPIO43/44, which are also the
@@ -53,3 +53,11 @@ CONFIG_MBEDTLS_SSL_DTLS_SRTP=y
 CONFIG_MBEDTLS_SSL_PROTO_DTLS=y
 CONFIG_ESP_WS_CLIENT_ENABLE_DYNAMIC_BUFFER=y
 CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK=y
+
+# ---------------------------------------------------------------------------
+# Voice assistant features (wake word, AGC, chimes, LEDs, local timers).
+# See main/Kconfig.projbuild "Voice Assistant Features" for all options.
+# ---------------------------------------------------------------------------
+# Wake word model packed into the 'model' partition (partitions.csv).
+CONFIG_SR_WN_WN9_HEYWILLOW_TTS=y
+CONFIG_MODEL_IN_FLASH=y

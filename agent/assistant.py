@@ -86,6 +86,14 @@ class Assistant(Agent):
             return self.t.message("timer_start_failed", reason=exc)
 
         logger.info("tool:set_timer -> %s (%.0fs)", record.name, total)
+        await self._publish_event(
+            "timer.set",
+            {
+                "id": record.id,
+                "name": record.name,
+                "duration_seconds": total,
+            },
+        )
         duration = self.t.format_duration(total)
         if record.name.startswith("timer "):
             return self.t.message("timer_started", duration=duration)
@@ -102,6 +110,10 @@ class Assistant(Agent):
         """
         record = self.timers.cancel(name)
         if record:
+            await self._publish_event(
+                "timer.cancel",
+                {"id": record.id, "name": record.name},
+            )
             return self.t.message("timer_cancelled", name=name)
         running = (
             ", ".join(t["name"] for t in self.timers.snapshot())
@@ -127,16 +139,23 @@ class Assistant(Agent):
 
     # ------------------------------------------------------------------
     async def _announce_timer_expired(self, record: TimerRecord) -> None:
-        """Speak the expiry announcement and notify room participants."""
+        """Announce the expiry (TTS unless the device rings locally) and
+        notify room participants."""
         text = self.t.message("timer_expired", name=record.name.capitalize())
         if self.audit is not None:
             self.audit.event("timer.expired", name=record.name)
-        if self._session is not None:
+        await self._publish_event(
+            "timer.expired", {"id": record.id, "name": record.name}
+        )
+        if self._session is None:
+            return
+        if not self.settings.timers_local:
+            # The device is not handling the local ring - speak it here.
             await self._session.say(text)
-        await self._publish_event("timer.expired", {"name": record.name})
 
     async def _publish_event(self, event: str, payload: dict) -> None:
-        """Best-effort data message so devices can react (LEDs, displays)."""
+        """Best-effort data message so devices can react (LEDs, displays,
+        local timers)."""
         if self._session is None:
             return
         try:
@@ -147,3 +166,8 @@ class Assistant(Agent):
             )
         except Exception:  # noqa: BLE001
             logger.debug("could not publish event %s", event, exc_info=True)
+
+    async def publish_session_state(self, state: str) -> None:
+        """Tell room devices which pipeline phase is active (listening /
+        thinking / speaking / idle) so they can drive their indicators."""
+        await self._publish_event("session.state", {"state": state})

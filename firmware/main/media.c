@@ -2,11 +2,17 @@
  * Media pipeline for the reSpeaker XVF3800.
  *
  * Capture: the XMOS XVF3800 performs mic array beamforming + AEC in hardware
- * and hands the ESP32 a processed 16 kHz stereo signal in 32-bit I2S slots.
- * The capture source is pinned to exactly that wire format (so esp_codec_dev
- * never reconfigures the bus) and the capture-sink pipeline converts it to
- * the Opus stream LiveKit expects (16 kHz / mono / 16-bit) - the converters
- * (bit depth + channels) are inserted automatically during negotiation.
+ * and hands the ESP32 a processed 16 kHz stereo signal in 32-bit I2S slots
+ * (24-bit samples, left-justified). The mic source (main/mic_source.c) wraps
+ * the record device: it converts slot 0 to 16 kHz / mono / 16-bit PCM and
+ * applies the de-clip gain (CONFIG_LK_AUDIO_INPUT_SHIFT). The capture sink
+ * then only has to encode that PCM to the Opus stream LiveKit expects
+ * (16 kHz / mono) - no sample converters are inserted.
+ *
+ * The capture sink delivers OPUS-ENCODED frames. The LiveKit engine forwards
+ * them to esp_peer untouched (esp_peer does NOT re-encode audio - it only
+ * packetizes into RTP). The encoded payload must never be modified anywhere
+ * on this path.
  *
  * Playback: the Opus track from the room is decoded to 16 kHz mono 16-bit
  * PCM; the renderer is told the hardware wants 16 kHz stereo 32-bit, so its
@@ -23,14 +29,11 @@
 #include "esp_audio_enc_default.h"
 
 #include "board.h"
+#include "chime.h"
 #include "media.h"
+#include "mic_source.h"
 
 static const char *TAG = "media";
-
-// Must match the I2S configuration in board.c (the XMOS wire format).
-#define MEDIA_SAMPLE_RATE     16000
-#define MEDIA_CHANNELS        2
-#define MEDIA_BITS_PER_SAMPLE 32
 
 #define NULL_CHECK(condition, message) \
     ESP_RETURN_ON_FALSE(condition, -1, TAG, message)
@@ -53,23 +56,11 @@ static int build_capturer_system(void)
     esp_codec_dev_handle_t record_handle = get_record_handle();
     NULL_CHECK(record_handle, "Failed to get record handle");
 
-    esp_capture_audio_dev_src_cfg_t codec_cfg = {
-        .record_handle = record_handle,
-    };
-    capturer_system.audio_source = esp_capture_new_audio_dev_src(&codec_cfg);
-    NULL_CHECK(capturer_system.audio_source, "Failed to create audio source");
-
-    // Pin the source capabilities to the XMOS I2S wire format. Without this
-    // the source would negotiate a default 16-bit format and the record
-    // device would reconfigure the I2S bus away from the 32-bit slots the
-    // XMOS drives.
-    esp_capture_audio_info_t fixed_caps = {
-        .format_id = ESP_CAPTURE_FMT_ID_PCM,
-        .sample_rate = MEDIA_SAMPLE_RATE,
-        .channel = MEDIA_CHANNELS,
-        .bits_per_sample = MEDIA_BITS_PER_SAMPLE,
-    };
-    capturer_system.audio_source->set_fixed_caps(capturer_system.audio_source, &fixed_caps);
+    // Mic source: XMOS wire format -> 16 kHz mono 16-bit PCM + de-clip gain.
+    // The fixed caps make the capture sink negotiate a converter-free path:
+    // only the Opus encoder sits between this source and the engine.
+    capturer_system.audio_source = mic_source_create(record_handle);
+    NULL_CHECK(capturer_system.audio_source, "Failed to create mic source");
 
     esp_capture_cfg_t cfg = {
         .sync_mode = ESP_CAPTURE_SYNC_MODE_AUDIO,
@@ -101,13 +92,18 @@ static int build_renderer_system(void)
     NULL_CHECK(renderer_system.av_renderer_handle, "Failed to create AV renderer");
 
     // Hardware format: the renderer's resampler converts the decoded Opus
-    // track (16 kHz / mono / 16-bit) to this before writing to I2S.
+    // track (16 kHz / mono / 16-bit) to the XMOS wire format before writing
+    // to I2S (see BOARD_I2S_* in board.h).
     av_render_audio_frame_info_t frame_info = {
-        .sample_rate = MEDIA_SAMPLE_RATE,
-        .channel = MEDIA_CHANNELS,
-        .bits_per_sample = MEDIA_BITS_PER_SAMPLE,
+        .sample_rate = BOARD_I2S_SAMPLE_RATE,
+        .channel = BOARD_I2S_CHANNELS,
+        .bits_per_sample = BOARD_I2S_SLOT_BITS,
     };
     av_render_set_fixed_frame_info(renderer_system.av_renderer_handle, &frame_info);
+
+    // Local notification sounds pause the room renderer while they play
+    // (see main/chime.c).
+    chime_attach_renderer(renderer_system.av_renderer_handle);
 
     return 0;
 }

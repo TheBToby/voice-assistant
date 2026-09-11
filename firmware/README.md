@@ -5,9 +5,10 @@ module) that connects the device as a voice-assistant endpoint to the
 self-hosted LiveKit server and its agent (see the repo root `README.md` for
 the docker stack).
 
-The firmware is intentionally minimal: WiFi + LiveKit room connection with
-**bidirectional audio** (publish microphone, play back the agent's replies).
-No wake word, no buttons - those are future work (see Roadmap).
+The device is a wake-word voice satellite: bidirectional audio with the
+LiveKit room (publish microphone, play back the agent's replies), plus
+on-device wake word detection with chime, XMOS beam locking, LED ring
+effects, local timer processing, mic AGC and notification sounds.
 
 ## Layout
 
@@ -20,8 +21,18 @@ firmware/
 │   └── example_utils/    # vendored from the SDK: WiFi Kconfig + helper
 └── main/
     ├── board.c           # XVF3800 hardware: I2S bridge, I2C, AIC3104, devices
-    ├── media.c           # capture (mic) + render (speaker) pipelines
-    ├── example.c         # LiveKit room connection
+    ├── xvf3800.c         # XMOS control port (I2C): LED ring, azimuth, beam
+    │                     #   lock, mic mute, firmware version
+    ├── mic_source.c      # mic capture source: wire format -> mono PCM,
+    │                     #   de-clip gain, DC block, AGC, wake-word tap,
+    │                     #   publish gate
+    ├── wake_word.c       # esp-sr AFE + WakeNet9 ("Hey Willow"), VAD
+    ├── voice_session.c   # orchestrator: wake -> chime -> beam lock -> gate
+    │                     #   open -> agent events -> session end
+    ├── chime.c           # synthesized notification sounds (wake/timer/mute)
+    ├── led_ring.c        # 12-LED ring effects engine (20 Hz task)
+    ├── local_timers.c    # local countdown mirror of the agent's timers
+    ├── example.c         # LiveKit room connection + data channel
     └── main.c            # app entrypoint
 ```
 
@@ -52,19 +63,89 @@ Two consequences of GPIO43/44 being wired to I2S:
 
 ## Audio path (who converts what)
 
-```
-mics -> XMOS (beamforming + AEC, hardware) -> I2S RX 16 kHz/2ch/32-bit
-     -> capture sink: bit 32->16, channels 2->1      (auto-inserted)
-     -> Opus 16 kHz mono                              -> LiveKit room
-LiveKit room -> Opus 16 kHz mono -> decoder
-     -> renderer resampler: ch 1->2, bits 16->32
-     -> I2S TX 16 kHz/2ch/32-bit -> XMOS -> AIC3104 -> speaker
+```text
+PUBLISH (mic)
+  mics -> XMOS (beamforming + AEC, hardware) -> I2S RX 16 kHz/2ch/32-bit slots
+       -> mic_source (main/mic_source.c): slot 0 -> mono, 32->16 bit,
+          de-clip gain (CONFIG_LK_AUDIO_INPUT_SHIFT), DC blocker,
+          software AGC (RMS target + peak limiter)
+       -> [tap] wake word engine (always hears the room)
+       -> [publish gate] closed = silence to the room (a wake word session
+          opens it; the agent's VAD stays quiet while closed)
+       -> capture sink: Opus encode 16 kHz mono     (auto-negotiated)
+       -> LiveKit engine: frames passed through UNTOUCHED
+          (they are already Opus packets - esp_peer does NOT re-encode,
+           it only packetizes into RTP)
+       -> LiveKit room
+
+SUBSCRIBE (speaker)
+  LiveKit room -> Opus 16 kHz mono -> decoder
+       -> renderer resampler: ch 1->2, bits 16->32
+       -> I2S TX 16 kHz/2ch/32-bit -> XMOS -> AIC3104 -> speaker
+  local chimes: synthesized PCM -> playback device while the room renderer
+       is paused (av_render_pause); the XMOS AEC cancels them from the mic
 ```
 
 The XMOS does the acoustic echo cancellation in hardware, so the firmware
-uses the plain audio device source (`esp_capture_new_audio_dev_src`) - no
-software AEC. The capture source pins its caps to the XMOS wire format
-(16 kHz/2ch/32-bit) so the I2S bus is never reconfigured underneath it.
+uses a custom capture source (`main/mic_source.c`) instead of the generic
+audio-device source: it converts the XMOS wire format to 16 kHz/mono/16-bit
+PCM, applies the de-clip gain, DC-blocks it and runs a software AGC
+(RMS-target gain with an instant peak limiter, `CONFIG_LK_MIC_AGC*`) before
+the Opus encoder. Because the source already matches the encoder's input
+format, the capture sink inserts no sample converters.
+
+Do not modify the audio frames in the publish path (e.g. in the LiveKit
+engine): after the capture sink they are Opus payloads, and touching their
+bytes corrupts the bitstream - the room then hears noise/silence and the
+receiver's jitter buffer stretches what little decodes, which shows up as
+"clipped, slow" audio.
+
+## Voice assistant features
+
+All features are configurable under `idf.py menuconfig` →
+*Voice Assistant Features* (defaults below).
+
+| Feature | Module | Behaviour |
+|---|---|---|
+| Wake word | `wake_word.c` | esp-sr WakeNet9 on the tapped XMOS signal ("Hey Willow" default, more models selectable; threshold configurable). VAD runs alongside for end-of-utterance detection. |
+| Wake chime | `chime.c` | Synthesized two-tone, played immediately on detection (the XMOS AEC removes it from the mic path). Mute/error tones included. |
+| Publish gate | `mic_source.c` | Mic publishes silence until the wake word; the agent never hears anything in between (like HA voice satellites). Disable with `LK_WAKE_WORD_GATE=n` for an always-open mic. |
+| Beam lock | `xvf3800.c` | On wake, the XMOS AEC fixed beams are pinned to the detected speaker azimuth (AEC servicer cmd 81/37) and released at session end - the published signal keeps isolating that speaker. |
+| LED ring | `led_ring.c` | Idle breathing (or dim red while mic muted), wake spin, beam direction while listening, agent-driven thinking/speaking effects, timer blink, error blink. |
+| Local timers | `local_timers.c` | Mirrors the agent's timers over the LiveKit data channel; counts down locally and rings with jingle + LED even if the agent is down. Rings wait for an idle device; wake word or any speech stops them. |
+| Mic AGC | `mic_source.c` | Recommended: normalizes mic level for STT (target -18 dBFS RMS, max +24 dB) and compensates speaker distance; limiter prevents clipping. |
+
+### Session flow
+
+```
+"Hey Willow" -> chime + ring spin -> beam lock at speaker direction
+             -> publish gate opens -> agent hears the command
+             -> agent state events drive the ring (listening/thinking/speaking)
+             -> ~1.5 s silence after speech -> gate closes, beam released
+```
+
+### Data channel protocol (LiveKit topics)
+
+Agent → device on `assistant.event` (JSON, reliable):
+
+| Event | Payload | Effect on device |
+|---|---|---|
+| `timer.set` | `id`, `name`, `duration_seconds` | Timer tracked locally |
+| `timer.cancel` | `id`, `name` | Timer removed |
+| `timer.expired` | `id`, `name` | Ensures the local ring |
+| `session.state` | `state` (`listening`/`thinking`/`speaking`) | LED ring effect |
+
+Device → agent on `device.event`: `wake_word`, `timer_ring_stopped` (both
+logged by the agent's audit reporter).
+
+The agent publishes the timer events itself; with the `TIMERS_LOCAL=true`
+agent setting (default) it no longer speaks the expiry announcement - the
+device's local ring replaces it. Set `TIMERS_LOCAL=false` to restore
+agent-side TTS announcements (then both fire: device jingle + agent speech).
+
+The wake word only works while the room is connected (the capture pipeline
+feeds the detector). The session flow likewise assumes the agent publishes
+`session.state`; without it the ring simply stays in the listening effect.
 
 ## Prerequisites
 
@@ -82,6 +163,11 @@ idf.py set-target esp32s3          # once per build directory
 idf.py build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
+
+`idf.py flash` also writes the wake word model into the new `model`
+partition (`srmodels.bin`, packed from the selected `CONFIG_SR_WN_*`).
+Existing installs need a one-time full flash because the partition table
+gained the `model` partition (and the app partition grew to 4 MB).
 
 WiFi credentials and the LiveKit server URL are preset in
 `sdkconfig.defaults` (edit there, or override via `idf.py menuconfig`).
@@ -101,10 +187,14 @@ and room (`home`) are whatever you minted.
 
 ## Verify
 
-1. Serial log shows `Room state changed: CONNECTED` (and an IP from DHCP).
+1. Serial log shows `Room state changed: CONNECTED` (and an IP from DHCP),
+   plus `XMOS XVF3800 control port ready (fw ...)` and `Wake word model: wn9_...`.
 2. `docker compose logs -f agent` shows the agent joining the device's room.
-3. Speak - the agent should answer through the speaker.
-4. The web console's *Talk* tab (browser client) can join the same room to
+3. Say the wake word - the chime plays, the ring spins and the beam locks;
+   the agent then hears the following command and answers through the speaker.
+4. "Stelle einen Timer auf 5 Minuten" - the device rings locally after 5 min;
+   wake word or any speech stops the ring.
+5. The web console's *Talk* tab (browser client) can join the same room to
    test the device end separately.
 
 ## Troubleshooting
@@ -114,15 +204,21 @@ and room (`home`) are whatever you minted.
 | Boot loops / garbled log, no `/dev/ttyACM0` | console not on USB Serial/JTAG - keep `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`; use the XIAO's USB-C port |
 | `GPIO 44 and 43 are used as console UART I/O pins` warning | same fix - USB Serial/JTAG console frees the I2S data pins |
 | No mic audio in the room (agent sees silence), board logs clean | XMOS running the USB firmware variant - reflash the XMOS with the I2S firmware per the Seeed wiki |
-| Audio reaches the agent but is unintelligible / full-scale peaks | XMOS output overdriven - lower the mic level on the XMOS side (Seeed I2C Audio Manager, ResID 35 volume / AGC) |
+| Audio reaches the agent but is unintelligible / full-scale peaks | XMOS output overdriven - keep the de-clip shift (`LK_AUDIO_INPUT_SHIFT`); the AGC log line (`mic_src: N frames: peak=...`) shows the post-gain peak |
+| `No esp-sr models in the 'model' partition` | wake word model not flashed - run `idf.py flash` (flashes `srmodels.bin`) or select a model via `CONFIG_SR_WN_*` |
+| Wake word never detected | say the wake word close to the device; watch `wake_word` volume in the log; lower `LK_WAKE_WORD_THRESHOLD_PERMILLE`; check the XMOS runs the I2S firmware variant |
+| Device wakes up on its own (TV, conversations) | raise `LK_WAKE_WORD_THRESHOLD_PERMILLE` (default 500) or pick a stricter model in menuconfig |
+| `XMOS control port 0x2C not responding` | XMOS still booting or wrong firmware variant; LED ring/beam lock/mute stay unavailable, audio still works |
+| Timer rings but the agent also announces | agent runs with `TIMERS_LOCAL=false` - set `TIMERS_LOCAL=true` (device rings locally instead of TTS) |
 | `Failure reason: Join Incomplete`, `parent stream too short` | signaling fragmentation - mitigated by the vendored SDK's 64 KB buffer (`components/livekit/README.md`); raise `SIGNAL_WS_BUFFER_SIZE` if a much larger join payload reappears |
 | Agent never joins the device's room | token/room mismatch: mint with the same `ROOM=`; use `ws://<host-LAN-IP>:7880` (never `localhost`); check TCP 7880 + UDP 50000-60200 reachability |
 | Speaker silent, mic path fine | AIC3104 unmute didn't apply - check the boot log for `AIC3104 reg ... write failed` (I2C wiring / XMOS firmware variant) |
 | WiFi drops mid-conversation | real-time audio needs RSSI better than ~ -70 dBm; check the `rssi:` line in the boot log |
 
-## Roadmap (not in this minimal firmware)
+## Roadmap ideas (not implemented)
 
-- On-device wake word (ESP-SR WakeNet) gating the published track
-- SET/MUTE buttons + LED ring via the XMOS I2C control port (0x2C)
+- SET/MUTE buttons (no buttons on this board; the XMOS mute GPO + LED
+  feedback are already wired in `xvf3800.c` / `led_ring.c`)
 - XMOS-side mic gain / AGC tuning via the I2C Audio Manager (ResID 35/17)
 - Hardware watchdog for the media pipeline
+- "Stop" wake word for the timer ring (currently any speech stops it)

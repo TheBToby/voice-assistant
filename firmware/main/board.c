@@ -36,6 +36,8 @@
 #include "driver/i2s_std.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
@@ -53,10 +55,6 @@ static const char *TAG = "board";
 #define BOARD_I2S_WS       GPIO_NUM_7
 #define BOARD_I2S_DIN      GPIO_NUM_43  // XMOS -> ESP32 (microphones)
 #define BOARD_I2S_DOUT     GPIO_NUM_44  // ESP32 -> XMOS (speaker path)
-
-#define BOARD_I2S_SAMPLE_RATE  16000
-#define BOARD_I2S_SLOT_BITS    32
-#define BOARD_I2S_CHANNELS     2
 
 #define AIC3104_I2C_ADDR       0x18
 
@@ -233,31 +231,30 @@ static esp_err_t init_devices(void)
     const audio_codec_if_t *codec = null_codec_new();
     ESP_RETURN_ON_FALSE(codec, ESP_FAIL, TAG, "Null codec init failed");
 
-    // I2S data interfaces (one per direction; esp_codec_dev pairs the TX/RX
-    // channels of the same I2S port internally for full duplex operation).
-    audio_codec_i2s_cfg_t i2s_out_cfg = {
+    // ONE data interface for both directions. esp_codec_dev's I2S backend
+    // coordinates TX/RX enable, disable and format changes per instance (on
+    // the ESP32-S3, reconfiguring one direction of a controller disturbs the
+    // other, so the backend carries pending-disable/compat-check logic keyed
+    // on a shared instance). Two separate instances - one per direction -
+    // defeat that logic: when the renderer opened playback the capture side's
+    // RX DMA silently starved and reads timed out
+    // ("AUD_SRC: Failed to read audio frame ret -8").
+    audio_codec_i2s_cfg_t i2s_cfg = {
         .port = I2S_NUM_0,
         .tx_handle = i2s_tx,
-    };
-    const audio_codec_data_if_t *data_out = audio_codec_new_i2s_data(&i2s_out_cfg);
-    ESP_RETURN_ON_FALSE(data_out, ESP_FAIL, TAG, "I2S data interface (out) failed");
-
-    audio_codec_i2s_cfg_t i2s_in_cfg = {
-        .port = I2S_NUM_0,
         .rx_handle = i2s_rx,
     };
-    const audio_codec_data_if_t *data_in = audio_codec_new_i2s_data(&i2s_in_cfg);
-    ESP_RETURN_ON_FALSE(data_in, ESP_FAIL, TAG, "I2S data interface (in) failed");
+    const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_cfg);
+    ESP_RETURN_ON_FALSE(data_if, ESP_FAIL, TAG, "I2S data interface failed");
 
     esp_codec_dev_cfg_t dev_cfg = {
         .codec_if = codec,
-        .data_if = data_out,
+        .data_if = data_if,
         .dev_type = ESP_CODEC_DEV_TYPE_OUT,
     };
     play_dev = esp_codec_dev_new(&dev_cfg);
     ESP_RETURN_ON_FALSE(play_dev, ESP_FAIL, TAG, "Playback device creation failed");
 
-    dev_cfg.data_if = data_in;
     dev_cfg.dev_type = ESP_CODEC_DEV_TYPE_IN;
     rec_dev = esp_codec_dev_new(&dev_cfg);
     ESP_RETURN_ON_FALSE(rec_dev, ESP_FAIL, TAG, "Record device creation failed");
@@ -296,4 +293,39 @@ esp_codec_dev_handle_t get_playback_handle(void)
 esp_codec_dev_handle_t get_record_handle(void)
 {
     return rec_dev;
+}
+
+i2c_master_bus_handle_t board_get_i2c_bus(void)
+{
+    return i2c_bus;
+}
+
+// ---------------------------------------------------------------------------
+// DIAG: dump raw I2S capture samples (both slots, as received on the wire).
+// Temporary - answers "what does the XMOS actually put in each slot?".
+// ---------------------------------------------------------------------------
+void board_diag_i2s_dump(void)
+{
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = BOARD_I2S_SAMPLE_RATE,
+        .channel = BOARD_I2S_CHANNELS,
+        .bits_per_sample = BOARD_I2S_SLOT_BITS,
+    };
+    if (esp_codec_dev_open(rec_dev, &fs) != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "DIAG: failed to open record device for dump");
+        return;
+    }
+    int32_t buf[32]; // 16 stereo L/R pairs
+    for (int f = 0; f < 5; f++) {
+        if (esp_codec_dev_read(rec_dev, buf, sizeof(buf)) == ESP_CODEC_DEV_OK) {
+            for (int i = 0; i < 16; i++) {
+                ESP_LOGI(TAG, "DIAG I2S frame %d pair %2d: L=%08X R=%08X",
+                    f, i, buf[2 * i], buf[2 * i + 1]);
+            }
+        } else {
+            ESP_LOGE(TAG, "DIAG: I2S read failed (frame %d)", f);
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+    esp_codec_dev_close(rec_dev);
 }

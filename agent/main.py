@@ -13,6 +13,7 @@ immediately gets a voice assistant.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from collections.abc import Iterable
@@ -406,6 +407,45 @@ async def entrypoint(ctx: JobContext) -> None:
             ctx.add_shutdown_callback(_close_recorder)
         except AttributeError:  # older/newer livekit-agents API
             logger.debug("add_shutdown_callback unavailable; recorder not closed")
+
+    # ------------------------------------------------------------------
+    # device integration: session-state broadcasts for the LED ring and
+    # device event ingestion (wake word, timer ring stopped) for the audit.
+    # ------------------------------------------------------------------
+    def _on_agent_state_changed(event) -> None:  # noqa: ANN001
+        state = getattr(event, "state", None)
+        value = getattr(state, "value", None) or str(state or "").lower()
+        if value in ("thinking", "speaking"):
+            asyncio.create_task(assistant.publish_session_state(value))
+
+    def _on_user_state_changed(event) -> None:  # noqa: ANN001
+        state = getattr(event, "state", None)
+        value = getattr(state, "value", None) or str(state or "").lower()
+        if value == "listening":
+            asyncio.create_task(assistant.publish_session_state("listening"))
+
+    session.on("agent_state_changed", _on_agent_state_changed)
+    session.on("user_state_changed", _on_user_state_changed)
+
+    def _on_data_received(packet) -> None:  # noqa: ANN001
+        topic = getattr(packet, "topic", None)
+        data = getattr(packet, "data", None)
+        if topic != "device.event" or not data:
+            return
+        try:
+            payload = json.loads(bytes(data))
+            event = payload.get("event")
+        except Exception:  # noqa: BLE001 - device payloads are best-effort
+            return
+        if reporter is not None and event:
+            reporter.event(
+                f"device.{event}",
+                data={k: v for k, v in payload.items() if k != "event"},
+            )
+        if event == "wake_word":
+            logger.info("device wake word detected")
+
+    ctx.room.on("data_received", _on_data_received)
 
     if reporter is not None:
         reporter.event(

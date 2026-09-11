@@ -15,4 +15,215 @@ menu "LiveKit Example"
             repo root with: make token ID=respeaker-1 ROOM=home
             The room name is encoded in the token, not set here.
 
+    config LK_AUDIO_INPUT_SHIFT
+        int "Mic capture gain reduction (right shift, bits)"
+        default 2
+        range 0 8
+        help
+            Right shift applied to the converted mic PCM samples in the
+            capture source (main/mic_source.c), BEFORE Opus encoding: each
+            bit halves the level (-6 dB). The XMOS mic level runs hot and
+            speech peaks clip at digital full scale, which breaks STT.
+            2 bits (-12 dB) is the starting point. Tune while watching the
+            "mic_src: N frames: peak" DIAG log - speech peaks should stay
+            well below 16000 (the AGC limiter also protects the encoder).
+            Never apply gain to the encoded frames: the publish path
+            carries Opus payloads.
+
+    config LK_AGENT_EVENT_TOPIC
+        string "Agent event data topic (incoming)"
+        default "assistant.event"
+        help
+            LiveKit data topic the agent publishes its events on (timers,
+            session state). Must match the agent's `_publish_event` topic.
+
+    config LK_DEVICE_EVENT_TOPIC
+        string "Device event data topic (outgoing)"
+        default "device.event"
+        help
+            LiveKit data topic this firmware publishes its events on
+            (wake word, timer ring stopped). The agent logs these via its
+            audit reporter.
+
 endmenu
+
+menu "Voice Assistant Features"
+
+    menu "Wake word (esp-sr WakeNet)"
+
+        config LK_WAKE_WORD
+            bool "Enable wake word detection"
+            default y
+            help
+                Detects the wake word on-device (esp-sr WakeNet9) and opens
+                a voice session: wake chime, XMOS beam lock at the speaker
+                direction, and opening the publish gate so the agent hears
+                the command. Requires the esp-sr 'model' flash partition.
+
+        config LK_WAKE_WORD_GATE
+            bool "Gate mic publishing behind the wake word"
+            default y
+            depends on LK_WAKE_WORD
+            help
+                While closed, the device publishes silence: the agent's VAD
+                never triggers and nothing the device overhears reaches the
+                STT. Disable to keep the mic always open (wake word then
+                only plays the chime/LED effects).
+
+        choice LK_WAKE_WORD_MODEL
+            prompt "Wake word model"
+            default LK_WAKE_WORD_MODEL_HEYWILLOW
+            depends on LK_WAKE_WORD
+            help
+                The model is packed into the 'model' partition at build
+                time (srmodels.bin) - flash it together with the app.
+
+            config LK_WAKE_WORD_MODEL_HEYWILLOW
+                bool "\"Hey Willow\" (wn9_heywillow_tts)"
+            config LK_WAKE_WORD_MODEL_HILEXIN
+                bool "\"Hi Lexin\" (wn9_hilexin)"
+            config LK_WAKE_WORD_MODEL_JARVIS
+                bool "\"Jarvis\" (wn9_jarvis_tts)"
+            config LK_WAKE_WORD_MODEL_COMPUTER
+                bool "\"Computer\" (wn9_computer_tts)"
+            config LK_WAKE_WORD_MODEL_ALEXA
+                bool "\"Alexa\" (wn9_alexa)"
+            config LK_WAKE_WORD_MODEL_HIESP
+                bool "\"Hi ESP\" (wn9_hiesp)"
+        endchoice
+
+        config LK_WAKE_WORD_THRESHOLD_PERMILLE
+            int "Wake word detection threshold (permille)"
+            default 500
+            range 100 900
+            depends on LK_WAKE_WORD
+            help
+                WakeNet detection threshold (0.1 = very sensitive, 0.9 =
+                very strict). 0.5 is a balanced default. Raise it if the
+                device wakes up spuriously (e.g. from TV audio), lower it
+                if wake-ups are missed.
+
+        config LK_WAKE_WORD_AFE_HIGH_PERF
+            bool "High-performance AFE mode"
+            default n
+            depends on LK_WAKE_WORD
+            help
+                Runs the AFE pipeline in high-performance mode (better
+                detection at higher CPU load). The default low-cost mode
+                leaves more headroom for the LiveKit media pipeline.
+
+    endmenu
+
+    menu "Voice session"
+
+        config LK_SESSION_SILENCE_MS
+            int "End-of-utterance silence timeout (ms)"
+            default 1500
+            range 500 10000
+            help
+                After the wake word, the session (and the publish gate)
+                closes once this much silence follows detected speech.
+
+        config LK_SESSION_MAX_MS
+            int "Maximum session duration (ms)"
+            default 30000
+            range 5000 120000
+            help
+                Hard cap for one wake-word session, as a safety net for the
+                VAD-based end detection.
+
+    endmenu
+
+    menu "Microphone AGC"
+
+        config LK_MIC_AGC
+            bool "Enable software AGC on the mic path"
+            default y
+            help
+                Automatic gain control in the capture source (after the
+                fixed de-clip shift): slow RMS-target gain adaptation with
+                an instant peak limiter. Normalizes the level for the STT
+                and compensates speaker distance. Recommended.
+
+        config LK_MIC_AGC_TARGET_DB
+            int "AGC target level (dBFS, negative)"
+            default -18
+            range -30 -6
+            depends on LK_MIC_AGC
+            help
+                RMS level the AGC converges to. -18 dBFS leaves headroom
+                for peaks while keeping quiet speech well above the noise
+                floor of the STT.
+
+        config LK_MIC_AGC_MAX_GAIN_DB
+            int "AGC maximum gain (dB)"
+            default 24
+            range 0 36
+            depends on LK_MIC_AGC
+            help
+                Upper bound for the AGC boost. High values help far-away
+                speakers but also amplify room noise; the peak limiter
+                protects against clipping in all cases.
+
+    endmenu
+
+    menu "Notification sounds (chimes)"
+
+        config LK_CHIMES
+            bool "Enable synthesized notification sounds"
+            default y
+            help
+                Wake chime, timer-finished ring and mute tones, synthesized
+                locally (no assets) and played through the speaker while
+                the room renderer is paused.
+
+        config LK_CHIME_VOLUME_PERCENT
+            int "Chime volume (percent)"
+            default 60
+            range 10 100
+            depends on LK_CHIMES
+
+        config LK_TIMER_RING_MINUTES
+            int "Timer ring timeout (minutes)"
+            default 5
+            range 1 30
+            depends on LK_CHIMES
+            help
+                A ringing timer repeats its jingle until stopped by voice
+                (wake word or any speech) or this timeout.
+
+    endmenu
+
+    menu "LED ring"
+
+        config LK_LEDS
+            bool "Enable LED ring effects"
+            default y
+            help
+                Drives the 12-LED ring over the XMOS control port: idle
+                breathing, wake spin, beam direction while listening,
+                agent-state effects (thinking/speaking) and timer blink.
+
+        config LK_LED_BRIGHTNESS_PERCENT
+            int "Master brightness (percent)"
+            default 40
+            range 5 100
+            depends on LK_LEDS
+
+    endmenu
+
+    menu "Local timers"
+
+        config LK_TIMERS
+            bool "Enable local timer processing"
+            default y
+            help
+                Mirrors the agent's timers over the LiveKit data channel
+                and runs the countdown locally: instant local ring (jingle
+                + LED) at expiry, working even while the agent reboots or
+                TTS announcements are disabled (agent TIMERS_LOCAL=true).
+
+    endmenu
+
+endmenu
+

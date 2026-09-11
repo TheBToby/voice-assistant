@@ -159,6 +159,11 @@ class AgentSettings:
     # MCP servers managed in the web console; first definition per id wins,
     # so these shadow MCP_SERVERS_JSON entries and Home Assistant
     extra_mcp_specs: tuple[MCPServerSpec, ...] = ()
+    # Device-delegated timers: when true, the ESP32 device rings timers
+    # locally (jingle + LED, see firmware main/local_timers.c) and the agent
+    # only publishes timer events on the data channel instead of speaking
+    # the announcement with TTS.
+    timers_local: bool = True
 
     # ------------------------------------------------------------------
     @property
@@ -210,6 +215,7 @@ class AgentSettings:
             console_token=_internal_token(e),
             debug_record_audio=_to_bool(e.get("DEBUG_RECORD_AUDIO", "true")),
             audit_enabled=not _to_bool(e.get("CONSOLE_AUDIT_DISABLED", "")),
+            timers_local=_to_bool(e.get("TIMERS_LOCAL", "true")),
         )
 
     # ------------------------------------------------------------------
