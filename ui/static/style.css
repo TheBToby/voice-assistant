@@ -48,7 +48,7 @@ input#token-room, input#audit-search, #audit-type {
 button, .button {
   display: inline-block; margin-top: .8rem; padding: .5rem 1rem; border: 0;
   border-radius: 8px; background: var(--accent); color: #fff; font-size: .9rem;
-  cursor: pointer; text-decoration: none;
+  cursor: pointer; text-decoration: none; user-select: none;
 }
 button.danger { background: var(--danger); }
 button.ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
@@ -64,7 +64,7 @@ header {
 nav { display: flex; gap: .2rem; flex: 1; }
 nav a {
   color: var(--muted); text-decoration: none; padding: .35rem .8rem;
-  border-radius: 8px; font-size: .92rem;
+  border-radius: 8px; font-size: .92rem; user-select: none;
 }
 nav a.active, nav a:hover { background: rgba(255,255,255,.06); color: var(--text); }
 .user { display: flex; align-items: center; gap: .6rem; color: var(--muted); font-size: .88rem; }

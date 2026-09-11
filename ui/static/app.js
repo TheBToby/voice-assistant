@@ -40,6 +40,14 @@ function toast(message, isError) {
   toastTimer = setTimeout(() => el.classList.add("hidden"), 3500);
 }
 
+function clearTextSelection() {
+  // Tab switches and table re-renders replace DOM under an existing text
+  // selection; dropping it keeps the browser from normalizing the now
+  // detached selection into a document-wide highlight (looks like ctrl+a).
+  const selection = window.getSelection();
+  if (selection && selection.rangeCount) selection.removeAllRanges();
+}
+
 async function api(path, options = {}) {
   const opts = { headers: {}, credentials: "same-origin", ...options };
   if (opts.method && opts.method !== "GET") opts.headers["X-VA-Request"] = "1";
@@ -132,6 +140,7 @@ const TABS = ["dashboard", "devices", "mcp", "settings", "audit"];
 const loaders = {};
 
 function route() {
+  clearTextSelection();
   const hash = (location.hash || "#dashboard").slice(1);
   const tab = TABS.includes(hash) ? hash : "dashboard";
   document.querySelectorAll("nav a[data-tab]").forEach((link) => {
@@ -922,6 +931,8 @@ async function fetchEvents(append) {
       : '<p class="hint">No events recorded yet.</p>';
   }
   oldestEventId = data.events.length ? data.events[data.events.length - 1].id : null;
+  // the render replaced nodes an existing selection pointed into
+  clearTextSelection();
   $("#audit-more").classList.toggle("hidden", data.events.length < 200);
   $("#audit-retention").innerHTML = data.transcripts_enabled
     ? "Transcript storage is <strong>on</strong> - utterances are stored (see Settings → Diagnostics)."
