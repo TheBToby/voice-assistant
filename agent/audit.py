@@ -207,7 +207,15 @@ class AuditReporter:
     def _on_user_input(self, event) -> None:  # noqa: ANN001
         try:
             if getattr(event, "is_final", False):
-                self.user_input(getattr(event, "text", ""))
+                # livekit-agents' user_input_transcribed event carries the
+                # utterance in `transcript` (there is no `text` attribute -
+                # reading `text` stored only empty user_input events even
+                # with transcript storage enabled); accept `text` as a
+                # fallback should a plugin version rename it again.
+                text = getattr(event, "transcript", None)
+                if text is None:
+                    text = getattr(event, "text", "")
+                self.user_input(text)
         except Exception:  # noqa: BLE001
             logger.debug("audit: user_input handler failed", exc_info=True)
 

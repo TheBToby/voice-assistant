@@ -117,9 +117,10 @@ def test_session_event_wiring_is_defensive():
             for k, v in kwargs.items():
                 setattr(self, k, v)
 
-    # user transcript: only final events are recorded
-    session.handlers["user_input_transcribed"](_Ev(text="partial", is_final=False))
-    session.handlers["user_input_transcribed"](_Ev(text="final question", is_final=True))
+    # user transcript: only final events are recorded (livekit-agents puts
+    # the utterance in `transcript` on user_input_transcribed events)
+    session.handlers["user_input_transcribed"](_Ev(transcript="partial", is_final=False))
+    session.handlers["user_input_transcribed"](_Ev(transcript="final question", is_final=True))
 
     # assistant reply from conversation item
     session.handlers["conversation_item_added"](
@@ -141,3 +142,50 @@ def test_session_event_wiring_is_defensive():
     assert types == ["user_input", "agent_reply", "tool.call"]
     assert reporter._queue[0]["data"]["redacted"] is True  # transcripts off
     assert reporter._queue[2]["data"]["tool"] == "set_timer"
+
+
+class _SpeakerEv:
+    """Shape of livekit-agents' UserInputTranscribedEvent (1.5.x)."""
+
+    def __init__(self, transcript, is_final, **extra):
+        self.transcript = transcript
+        self.is_final = is_final
+        for k, v in extra.items():
+            setattr(self, k, v)
+
+
+def test_final_transcripts_are_logged_when_storage_enabled():
+    """Regression: the event exposes `transcript`, not `text`.
+
+    Reading `text` stored only empty user_input events, so transcribed
+    commands never appeared in the audit trail even with "Store
+    transcripts" enabled.
+    """
+    reporter = AuditReporter(console_url="http://c", token="t")
+    reporter.configure(transcripts=True)
+
+    reporter._on_user_input(_SpeakerEv("stell den Timer auf f\u00fcnf Minuten", is_final=False))
+    reporter._on_user_input(_SpeakerEv("stell den Timer auf f\u00fcnf Minuten", is_final=True))
+    # legacy attribute name still accepted (defensive fallback)
+    reporter._on_user_input(_SpeakerEv(None, is_final=True, text="legacy shape"))
+
+    queued = reporter._queue
+    assert [e["type"] for e in queued] == ["user_input", "user_input"]
+    assert queued[0]["data"]["text"] == "stell den Timer auf f\u00fcnf Minuten"
+    assert queued[1]["data"]["text"] == "legacy shape"
+    assert "redacted" not in queued[0]["data"]
+
+
+def test_transcript_events_store_metadata_only_when_disabled():
+    """With transcript storage off the utterance is dropped but the fact
+    that a command was spoken is still recorded (redacted placeholder)."""
+    reporter = AuditReporter(console_url="http://c", token="t")  # transcripts off
+
+    reporter._on_user_input(_SpeakerEv("secret utterance", is_final=True))
+    reporter._on_user_input(_SpeakerEv("partial", is_final=False))
+
+    assert len(reporter._queue) == 1
+    event = reporter._queue[0]
+    assert event["type"] == "user_input"
+    assert "text" not in event["data"]
+    assert event["data"]["redacted"] is True
