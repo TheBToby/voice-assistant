@@ -108,8 +108,8 @@ class Assistant(Agent):
         Args:
             name: the timer's name, e.g. "pizza", or its number, e.g. "2"
         """
-        record = self.timers.cancel(name)
-        if record:
+        record = self.timers.find(name)
+        if record is not None and self.timers.cancel(record.name):
             await self._publish_event(
                 "timer.cancel",
                 {"id": record.id, "name": record.name},
