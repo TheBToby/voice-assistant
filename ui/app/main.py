@@ -860,6 +860,22 @@ def create_app() -> FastAPI:
     # ------------------------------------------------------------------
     # static UI
     # ------------------------------------------------------------------
+    @app.middleware("http")
+    async def _ui_revalidate_cache(request: Request, call_next):
+        """The console UI must never be served stale from heuristic caching.
+
+        Browsers cache assets without a Cache-Control header heuristically
+        (often for days) - after a console update the old app.js kept posting
+        requests in the old shape (e.g. token mints without the selected
+        validity). no-cache still allows ETag revalidation (304 responses),
+        so nothing is re-downloaded unless it actually changed.
+        """
+        response = await call_next(request)
+        path = request.url.path
+        if path == "/" or path == "/talk" or path.startswith("/static/"):
+            response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
     @app.get("/", include_in_schema=False)
     async def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")

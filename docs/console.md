@@ -14,7 +14,7 @@ What it gives you:
 | **MCP Servers** | Add / edit / enable / remove MCP servers at runtime - no `.env` edit, no restart; per-server details (protocol version, server name, latency) with the tools each server offers, per-tool enable/disable switches, and a **tool tester** for calling tools with typed requests |
 | **Settings** | All non-fundamental settings (persona, models, Home Assistant, diagnostics retention) with env defaults + stored overrides |
 | **Audit Log** | Interaction trail (sessions, tools, timers, logins, config changes), filterable, exportable (CSV/JSON), retention configurable in days |
-| **Talk** | The browser test client: one click mints a token server-side and joins the default room; commands can be **spoken or typed** (typed commands travel on the `assistant.text` topic and are answered through the full pipeline - tools + TTS audio - even while the reSpeaker is in the room) |
+| **Talk** | The browser test client: one click mints a token server-side and joins the default room; commands can be **spoken or typed**. Keyboard is the default input (microphone and playback stay muted) - switching to **Voice** enables microphone + agent-audio playback. Typed commands travel on the `assistant.text` topic and are answered through the full pipeline (tools + TTS audio) even while the reSpeaker is in the room |
 
 ## Devices & tokens
 

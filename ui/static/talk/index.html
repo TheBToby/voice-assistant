@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <title>Voice Assistant - Talk (browser test client)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="stylesheet" href="/static/style.css" />
+<link rel="stylesheet" href="/static/style.css?v=2" />
 <style>
   body { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
   label { display: block; margin-top: 1rem; font-size: .9rem; color: var(--muted); }
@@ -12,6 +12,11 @@
             white-space: pre-wrap; background: var(--panel); border: 1px solid var(--border);
             border-radius: 8px; padding: .8rem; min-height: 6rem; }
   .back { display: inline-block; margin-bottom: 1rem; color: #7ab8ff; }
+  #input-mode { margin-top: 1rem; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+  .mode-btn { padding: .35rem .9rem; }
+  .mode-btn.active { outline: 2px solid #7ab8ff; font-weight: 600; }
+  .mode-btn:disabled { opacity: .45; cursor: not-allowed; }
+  #mode-hint { font-size: .8rem; }
 </style>
 </head>
 <body>
@@ -19,8 +24,10 @@
 <h1>Talk to the assistant</h1>
 <p class="hint">
   Joins the same LiveKit room as the reSpeaker XVF3800. A short-lived access
-  token is minted by the console - no CLI needed.
-  Microphone access requires a secure context (localhost or HTTPS).
+  token is minted by the console - no CLI needed. Keyboard commands are the
+  default; switch to <strong>Voice</strong> to enable the microphone and the
+  agent-audio playback. Microphone access requires a secure context
+  (localhost or HTTPS).
 </p>
 
 <label>LiveKit URL (ws:// or wss://) - pre-filled from the console settings
@@ -39,7 +46,14 @@
 <button id="connect">Connect &amp; talk</button>
 <button id="disconnect" class="danger" disabled>Disconnect</button>
 
-<label>Type a command (works without a microphone - handy for testing)
+<div id="input-mode">
+  <span class="hint">Input mode:</span>
+  <button id="mode-text" class="mode-btn active" disabled>&#9000; Keyboard</button>
+  <button id="mode-voice" class="mode-btn" disabled>&#127908; Voice</button>
+  <span class="hint" id="mode-hint">keyboard is the default - voice mode enables microphone + playback</span>
+</div>
+
+<label>Type a command (works in both modes - no microphone needed for testing)
   <div>
     <input id="text-input" style="width:70%"
            placeholder="e.g. wie viel Uhr ist es? / set a timer for 2 minutes"
@@ -61,7 +75,13 @@
   const disconnectBtn = document.getElementById('disconnect');
   const textInput = document.getElementById('text-input');
   const textSend = document.getElementById('text-send');
+  const modeTextBtn = document.getElementById('mode-text');
+  const modeVoiceBtn = document.getElementById('mode-voice');
+  const audioEl = document.getElementById('remote-audio');
   let room = null;
+  // Keyboard is the default: microphone and agent-audio playback are only
+  // enabled after explicitly switching to Voice mode.
+  let inputMode = 'text';
 
   function log(msg) {
     statusEl.textContent += (statusEl.textContent ? '\n' : '') +
@@ -143,7 +163,11 @@
       room.on('trackSubscribed', (track, pub, participant) => {
         log('subscribed to ' + track.kind + ' from ' + participant.identity);
         if (track.kind === 'audio') {
-          track.attach(document.getElementById('remote-audio'));
+          if (inputMode === 'voice') {
+            track.attach(audioEl);
+          } else {
+            log('agent audio muted (keyboard mode) - switch to Voice to listen');
+          }
         }
       });
       room.on('disconnected', () => log('disconnected'));
@@ -156,12 +180,14 @@
       log('connected to room: ' + room.name);
 
       textSend.disabled = false;
+      modeTextBtn.disabled = false;
+      modeVoiceBtn.disabled = !micAvailable();
       if (!micAvailable()) {
-        log('ERROR: ' + micHint());
-        log('tip: you can still test via the text command field below.');
+        log('voice mode unavailable: ' + micHint());
+        log('tip: keyboard commands work fine for testing.');
       } else {
-        await room.localParticipant.setMicrophoneEnabled(true);
-        log('microphone live - start talking');
+        log('connected in keyboard mode - microphone and playback muted; ' +
+            'switch to Voice to talk & listen');
       }
       connectBtn.disabled = true;
       disconnectBtn.disabled = false;
@@ -175,8 +201,71 @@
     connectBtn.disabled = false;
     disconnectBtn.disabled = true;
     textSend.disabled = true;
+    // Reset to the keyboard default; drop mic + playback so nothing keeps
+    // running after the session.
+    inputMode = 'text';
+    modeTextBtn.classList.add('active');
+    modeVoiceBtn.classList.remove('active');
+    modeTextBtn.disabled = true;
+    modeVoiceBtn.disabled = true;
+    audioEl.srcObject = null;
     log('session ended');
   });
+
+  // ------------------------------------------------------------------
+  // Input mode: keyboard is the default. Switching to Voice enables the
+  // microphone AND the agent-audio playback path; switching back mutes
+  // both. Typed commands remain available in either mode.
+  // ------------------------------------------------------------------
+  function subscribedAudioTracks() {
+    const tracks = [];
+    room.remoteParticipants.forEach((participant) => {
+      participant.trackPublications.forEach((publication) => {
+        if (publication.isSubscribed && publication.track &&
+            publication.track.kind === 'audio') {
+          tracks.push(publication.track);
+        }
+      });
+    });
+    return tracks;
+  }
+
+  async function applyAudioPath() {
+    const tracks = subscribedAudioTracks();
+    if (inputMode === 'voice') {
+      tracks.forEach((t) => t.attach(audioEl));
+    } else {
+      tracks.forEach((t) => t.detach(audioEl));
+      audioEl.srcObject = null;
+    }
+  }
+
+  async function applyMicrophone() {
+    if (!micAvailable()) return;
+    try {
+      await room.localParticipant.setMicrophoneEnabled(inputMode === 'voice');
+    } catch (err) {
+      log('microphone toggle failed: ' + err.message);
+    }
+  }
+
+  async function setInputMode(mode) {
+    if (!room || inputMode === mode) return;
+    if (mode === 'voice' && !micAvailable()) {
+      log('voice mode unavailable: ' + micHint());
+      return;
+    }
+    inputMode = mode;
+    modeTextBtn.classList.toggle('active', mode === 'text');
+    modeVoiceBtn.classList.toggle('active', mode === 'voice');
+    await applyMicrophone();
+    await applyAudioPath();
+    log(mode === 'voice'
+      ? 'input mode: voice - microphone live, agent audio audible'
+      : 'input mode: keyboard - microphone muted, agent audio muted');
+  }
+  modeTextBtn.addEventListener('click', () => { setInputMode('text').catch((e) => log(e.message)); });
+  modeVoiceBtn.addEventListener('click', () => { setInputMode('voice').catch((e) => log(e.message)); });
 
   // ------------------------------------------------------------------
   // Text commands: sent as a LiveKit text stream on the 'assistant.text'
