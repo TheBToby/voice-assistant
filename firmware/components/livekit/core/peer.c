@@ -173,6 +173,13 @@ static int on_audio_info(esp_peer_audio_stream_info_t *info, void *ctx)
 static int on_audio_data(esp_peer_audio_frame_t *info, void *ctx)
 {
     peer_t *peer = (peer_t *)ctx;
+    // DIAG: downlink audio flow meter (role 0=publisher, 1=subscriber).
+    static uint32_t diag_down_frames = 0;
+    if (diag_down_frames == 0 || diag_down_frames % 500 == 0) {
+        ESP_LOGI(TAG(peer), "DIAG: downlink audio frames=%u size=%u role=%d",
+            diag_down_frames, info->size, peer->options.role);
+    }
+    diag_down_frames++;
     if (peer->options.on_audio_frame != NULL) {
         peer->options.on_audio_frame(info, peer->options.ctx);
     }

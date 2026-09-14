@@ -23,9 +23,9 @@ rtc:
   # signal+media onto the server's loopback (NODE_IP=127.0.0.1). For LAN
   # production - especially with embedded clients (XVF3800) - set false:
   # advertising a 127.0.0.1 candidate can wedge a minimal ICE stack
-  # (sub transport never completes DTLS). Keep false for plain LAN
-  # deployments.
-  enable_loopback_candidate: true
+  # (sub transport never completes DTLS) and LAN clients fail ICE with
+  # "Unreachable". Keep false for plain LAN deployments.
+  enable_loopback_candidate: false
 
 # TURN relay for restrictive networks / remote access.
 # For internet-facing deployments enable this (requires TLS certs) or run

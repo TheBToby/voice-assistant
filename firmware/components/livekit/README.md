@@ -15,6 +15,12 @@ firmware builds against a known SDK revision and can carry local fixes.
   room) arrives fragmented and join fails with `Join Incomplete`
   (upstream issue livekit/client-sdk-esp32#86). Details in the comment at the
   `SIGNAL_WS_BUFFER_SIZE` definition.
+- `core/engine.c`: read-only DIAG publish-rate log in
+  `_media_stream_send_audio` (frames/fps/avg bytes every 250 frames). The
+  capture sink delivers Opus-encoded frames and esp_peer does not re-encode,
+  so the publish path must forward payloads untouched - this log makes it
+  visible when the path is starved (< ~50 fps for 20 ms Opus frames), which
+  the receiver hears as stretched/choppy audio.
 
 The upstream `examples/` and `test_app/` directories are omitted; the firmware
 using this component lives in `firmware/main/` (based on the upstream

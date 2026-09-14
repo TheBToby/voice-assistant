@@ -16,6 +16,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/timers.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #ifdef CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
@@ -31,13 +32,18 @@
 
 static const char *TAG = "livekit_signaling";
 
-// Signaling messages are decoded in-place from this buffer. The socket layer
-// delivers raw TCP fragments, and this SDK (0.3.x) has no reassembly
-// (upstream: livekit/client-sdk-esp32#86). When an agent is in the room the
-// JoinResponse grows past the stock 20 KB, arrives fragmented, and every
-// fragment fails to decode ("parent stream too short" -> "Join Incomplete").
-// 64 KB covers realistic join payloads; PSRAM absorbs the allocation.
-#define SIGNAL_WS_BUFFER_SIZE          64 * 1024
+// Signaling messages are decoded from this buffer. The socket layer delivers
+// raw TCP fragments, and this SDK (0.3.x) had no reassembly (upstream:
+// livekit/client-sdk-esp32#86): esp_websocket_client streams messages larger
+// than one transport read - or split across TLS records - as multiple
+// WEBSOCKET_EVENT_DATA events, and decoding each event standalone corrupts
+// the stream ("end-of-stream" / "wrong wire type" / "parent stream too
+// short"), silently losing e.g. TrickleRequests carrying the server's ICE
+// candidates. on_ws_event() now reassembles chunks; the buffer only bounds
+// the client-side read chunk. PSRAM absorbs the allocation.
+#define SIGNAL_WS_BUFFER_SIZE          128 * 1024
+// Hard cap for a reassembled signal message.
+#define SIGNAL_RX_MAX_SIZE             256 * 1024
 #define SIGNAL_WS_RECONNECT_TIMEOUT_MS 1000
 #define SIGNAL_WS_NETWORK_TIMEOUT_MS   10000
 #define SIGNAL_WS_CLOSE_CODE           1000
@@ -51,6 +57,10 @@ typedef struct {
     TimerHandle_t ping_interval_timer;
     TimerHandle_t ping_timeout_timer;
     int64_t rtt;
+    // Fragment reassembly state (see SIGNAL_RX_MAX_SIZE).
+    uint8_t *rx_buf;
+    size_t rx_cap;
+    size_t rx_len;
 
 #if CONFIG_LK_BENCHMARK
     uint64_t start_time;
@@ -163,12 +173,12 @@ static void on_ws_event(void *ctx, esp_event_base_t base, int32_t event_id, void
             sg->is_terminal_state = false;
             change_state(sg, SIGNAL_STATE_CONNECTING);
             break;
-        case WEBSOCKET_EVENT_CLOSED:
         case WEBSOCKET_EVENT_DISCONNECTED:
         case WEBSOCKET_EVENT_FINISH:
             if (sg->is_terminal_state) {
                 break;
             }
+            sg->rx_len = 0; // Drop any partially reassembled message.
             bool is_ping_timeout = xTimerIsTimerActive(sg->ping_timeout_timer) == pdFALSE;
             xTimerStop(sg->ping_timeout_timer, 0);
             xTimerStop(sg->ping_interval_timer, 0);
@@ -195,13 +205,71 @@ static void on_ws_event(void *ctx, esp_event_base_t base, int32_t event_id, void
 #endif
             change_state(sg, SIGNAL_STATE_CONNECTED);
             break;
-        case WEBSOCKET_EVENT_DATA:
+        case WEBSOCKET_EVENT_DATA: {
             if (data->op_code != WS_TRANSPORT_OPCODES_BINARY) {
                 break;
             }
-            if (data->data_len < 1) break;
+            // esp_websocket_client streams a message larger than one transport
+            // read (TCP segmentation, TLS record boundaries) as multiple events.
+            // payload_offset/payload_len locate each chunk within the message:
+            // accumulate chunks and only decode complete messages. Decoding
+            // every event standalone loses whatever message straddled a
+            // boundary - including the TrickleRequests carrying the server's
+            // ICE candidates, without which ICE can never complete.
+            if (data->payload_len <= 0 || data->data_len < 1) {
+                break;
+            }
+            const size_t offset = (size_t)data->payload_offset;
+            const size_t total = (size_t)data->payload_len;
+            const bool is_last = offset + (size_t)data->data_len >= total;
+
+            const uint8_t *msg;
+            size_t len;
+
+            if (offset == 0 && is_last && sg->rx_len == 0) {
+                // Fast path: complete message in a single event.
+                msg = (const uint8_t *)data->data_ptr;
+                len = (size_t)data->data_len;
+            } else {
+                if (total > SIGNAL_RX_MAX_SIZE) {
+                    ESP_LOGE(TAG, "Signal message too large: %u bytes", (unsigned)total);
+                    sg->rx_len = 0;
+                    break;
+                }
+                if (sg->rx_cap < total) {
+                    free(sg->rx_buf);
+                    sg->rx_buf = heap_caps_calloc(1, total, MALLOC_CAP_SPIRAM);
+                    if (sg->rx_buf == NULL) {
+                        sg->rx_buf = malloc(total);
+                    }
+                    if (sg->rx_buf == NULL) {
+                        ESP_LOGE(TAG, "Failed to allocate %u byte rx buffer", (unsigned)total);
+                        sg->rx_cap = 0;
+                        sg->rx_len = 0;
+                        break;
+                    }
+                    sg->rx_cap = total;
+                    ESP_LOGD(TAG, "rx buffer sized to %u bytes", (unsigned)total);
+                }
+                if (offset != sg->rx_len) {
+                    // Chunk sequence out of sync - drop the message.
+                    ESP_LOGE(TAG, "Chunk out of sync (offset=%u, buffered=%u)",
+                             (unsigned)offset, (unsigned)sg->rx_len);
+                    sg->rx_len = 0;
+                    break;
+                }
+                memcpy(sg->rx_buf + sg->rx_len, data->data_ptr, data->data_len);
+                sg->rx_len = offset + (size_t)data->data_len;
+                if (!is_last) {
+                    break; // Wait for the remaining chunk(s).
+                }
+                msg = sg->rx_buf;
+                len = sg->rx_len;
+                sg->rx_len = 0;
+            }
+
             livekit_pb_signal_response_t res = {};
-            if (!protocol_signal_response_decode((const uint8_t *)data->data_ptr, (size_t)data->data_len, &res)) {
+            if (!protocol_signal_response_decode(msg, len, &res)) {
                 break;
             }
             if (res.which_message == 0) {
@@ -219,6 +287,7 @@ static void on_ws_event(void *ctx, esp_event_base_t base, int32_t event_id, void
                 protocol_signal_response_free(&res);
             }
             break;
+        }
         default:
             break;
     }
@@ -291,6 +360,7 @@ signal_err_t signal_destroy(signal_handle_t handle)
         return SIGNAL_ERR_INVALID_ARG;
     }
     signal_t *sg = (signal_t *)handle;
+    free(sg->rx_buf);
 
     if (sg->ws != NULL) {
         esp_websocket_client_stop(sg->ws);

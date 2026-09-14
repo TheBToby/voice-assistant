@@ -225,12 +225,26 @@ static inline esp_capture_format_id_t capture_video_codec_type(esp_peer_video_co
 }
 
 /// Captures and sends a single audio frame over the peer connection.
+///
+/// IMPORTANT: the capture sink is configured for OPUS, so the frames acquired
+/// here are OPUS-ENCODED packets, not PCM. esp_peer does not re-encode audio
+/// (it only packetizes into RTP), so these payloads must reach
+/// `peer_send_audio` unmodified. Mic-level adjustments belong in the capture
+/// source (main/mic_source.c), never here.
 __attribute__((always_inline))
 static inline void _media_stream_send_audio(engine_t *eng)
 {
     esp_capture_stream_frame_t audio_frame = {
         .stream_type = ESP_CAPTURE_STREAM_TYPE_AUDIO,
     };
+    // DIAG: publish rate monitor (read-only). The sink produces one 20 ms
+    // Opus frame per batch; a steady ~50 fps means the publish path keeps up
+    // with real time. Persistently fewer frames = capture starvation - the
+    // receiver then stretches/conceals the stream, heard as slow/choppy
+    // audio. avg bytes ≈ 60-120 for Opus speech at typical bitrates.
+    static uint32_t diag_frames = 0;
+    static uint32_t diag_bytes = 0;
+    static TickType_t diag_start;
     while (esp_capture_sink_acquire_frame(eng->capturer_path, &audio_frame, true) == ESP_CAPTURE_ERR_OK) {
         esp_peer_audio_frame_t audio_send_frame = {
             .pts = audio_frame.pts,
@@ -239,6 +253,23 @@ static inline void _media_stream_send_audio(engine_t *eng)
         };
         peer_send_audio(eng->pub_peer_handle, &audio_send_frame);
         esp_capture_sink_release_frame(eng->capturer_path, &audio_frame);
+
+        TickType_t now = xTaskGetTickCount();
+        if (diag_frames == 0) {
+            diag_start = now;
+        }
+        diag_bytes += (uint32_t)audio_frame.size;
+        if (++diag_frames >= 250) {
+            uint32_t elapsed_ms = (uint32_t)((now - diag_start) * portTICK_PERIOD_MS);
+            uint32_t fps = elapsed_ms ? (diag_frames * 1000U) / elapsed_ms : 0;
+            uint32_t avg = diag_bytes / diag_frames;
+            ESP_LOGI(TAG, "DIAG: published %u opus frames in %u ms (%u fps, avg %u B)%s",
+                     (unsigned)diag_frames, (unsigned)elapsed_ms,
+                     (unsigned)fps, (unsigned)avg,
+                     fps >= 45 ? "" : " (STARVED - not real-time)");
+            diag_frames = 0;
+            diag_bytes = 0;
+        }
     }
 }
 
@@ -712,8 +743,11 @@ static void handle_trickle(engine_t *eng, const livekit_pb_trickle_request_t *tr
 {
     char* candidate = NULL;
     if (!protocol_signal_trickle_get_candidate(trickle, &candidate)) {
+        ESP_LOGW(TAG, "DIAG: failed to extract trickle candidate (target=%d)", trickle->target);
         return;
     }
+    // DIAG: temporary instrumentation for candidate matching investigation.
+    ESP_LOGI(TAG, "DIAG: trickle candidate (target=%d): %s", trickle->target, candidate);
     peer_handle_t target_peer = trickle->target == LIVEKIT_PB_SIGNAL_TARGET_PUBLISHER ?
         eng->pub_peer_handle : eng->sub_peer_handle;
     peer_handle_ice_candidate(target_peer, candidate);
@@ -821,10 +855,12 @@ static bool handle_state_connecting(engine_t *eng, const engine_event_t *ev)
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_ANSWER_TAG:
                     const livekit_pb_session_description_t *answer = &res->message.answer;
+                    ESP_LOGI(TAG, "DIAG: received publisher answer SDP:\n%s", answer->sdp);
                     peer_handle_sdp(eng->pub_peer_handle, answer->sdp);
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_OFFER_TAG:
                     const livekit_pb_session_description_t *offer = &res->message.offer;
+                    ESP_LOGI(TAG, "DIAG: received subscriber offer SDP:\n%s", offer->sdp);
                     peer_handle_sdp(eng->sub_peer_handle, offer->sdp);
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_TRICKLE_TAG:
@@ -852,6 +888,9 @@ static bool handle_state_connecting(engine_t *eng, const engine_event_t *ev)
         case EV_PEER_STATE:
             connection_state_t peer_state = ev->detail.peer_state.state;
             peer_role_t role = ev->detail.peer_state.role;
+            // DIAG: track per-transport connection progress.
+            ESP_LOGI(TAG, "DIAG: %s peer state -> %d",
+                role == PEER_ROLE_PUBLISHER ? "pub" : "sub", peer_state);
 
             // If either peer fails or disconnects, transition to backoff
             if (peer_state == CONNECTION_STATE_DISCONNECTED ||
@@ -871,6 +910,7 @@ static bool handle_state_connecting(engine_t *eng, const engine_event_t *ev)
         case EV_PEER_SDP:
             const char *sdp = ev->detail.peer_sdp.sdp;
             peer_role_t sdp_role = ev->detail.peer_sdp.role;
+            ESP_LOGI(TAG, "DIAG: sending local SDP (role=%d):\n%s", sdp_role, sdp);
             if (sdp_role == PEER_ROLE_PUBLISHER) {
                 signal_send_offer(eng->signal_handle, sdp);
             } else {
@@ -919,10 +959,12 @@ static bool handle_state_connected(engine_t *eng, const engine_event_t *ev)
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_ANSWER_TAG:
                     const livekit_pb_session_description_t *answer = &res->message.answer;
+                    ESP_LOGI(TAG, "DIAG: received publisher answer SDP:\n%s", answer->sdp);
                     peer_handle_sdp(eng->pub_peer_handle, answer->sdp);
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_OFFER_TAG:
                     const livekit_pb_session_description_t *offer = &res->message.offer;
+                    ESP_LOGI(TAG, "DIAG: received subscriber offer SDP:\n%s", offer->sdp);
                     peer_handle_sdp(eng->sub_peer_handle, offer->sdp);
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_TRICKLE_TAG:
