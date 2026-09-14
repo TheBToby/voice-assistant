@@ -6,7 +6,9 @@
  * package (Respeaker-XVF3800-ESPHome-integration, packages/leds.yaml): one
  * user ring color drives every phase, with these per-state effects:
  *
- *   IDLE      user color, solid (reference: the "LED Ring" light, solid)
+ *   IDLE      dark by default (LK_LED_IDLE_SOLID restores the reference's
+ *             solid user color); dim red ring while the mic is muted, and
+ *             an active countdown bar while a timer runs
  *   WAKE      beam snapshot in user color at 0.8 (waiting_for_command)
  *   LISTENING live beam direction, user color at 1.0 (listening_for_command)
  *   THINKING  breathe, user color, 1 Hz at 0.6

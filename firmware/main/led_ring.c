@@ -25,6 +25,10 @@ static const char *TAG = "led_ring";
 #ifndef CONFIG_LK_LED_COLOR
 #define CONFIG_LK_LED_COLOR 0xFF00FF
 #endif
+// Idle ring behavior: dark unless the reference always-lit look is selected.
+#ifndef CONFIG_LK_LED_IDLE_SOLID
+#define CONFIG_LK_LED_IDLE_SOLID 0
+#endif
 
 #define TICK_MS            50       // render interval (reference: 50 ms)
 #define WAKE_SNAPSHOT_MS   700      // WAKE (beam snapshot) -> LISTENING
@@ -262,19 +266,29 @@ static void render_frame(uint32_t *colors, float dt)
     if (s_led.state == LED_RING_STATE_OFF) {
         return;
     }
-    if (s_led.state == LED_RING_STATE_IDLE && s_led.muted) {
-        // Local extension: dim red ring while the DSP mic is muted.
-        for (int i = 0; i < XVF3800_LED_COUNT; i++) {
-            colors[i] = to_rgb(mix(MUTED_R, 70.0f / 255.0f), 0, 0);
+    if (s_led.state == LED_RING_STATE_IDLE) {
+        if (s_led.muted) {
+            // Local extension: dim red ring while the DSP mic is muted.
+            for (int i = 0; i < XVF3800_LED_COUNT; i++) {
+                colors[i] = to_rgb(mix(MUTED_R, 70.0f / 255.0f), 0, 0);
+            }
+            return;
         }
+        if (s_led.timer_ratio > 0.0f) {
+            // A countdown is running: show the timer_tick bar while idle
+            // (reference: control_leds -> control_leds_timer_ticking).
+            static const led_effect_t tick = {EFFECT_TIMER_TICK, USER_R, USER_G, USER_B, 1.0f, 0.7f};
+            render_timer_tick(colors, &tick);
+            return;
+        }
+#if !CONFIG_LK_LED_IDLE_SOLID
+        // Idle = dark: the ring stays off while the assistant is not
+        // actively working on a command. It lights only for the command
+        // phases (wake/listening/thinking/speaking), an active timer or
+        // the mute indicator. Enable LK_LED_IDLE_SOLID for the
+        // reference's always-lit solid user color.
         return;
-    }
-    if (s_led.state == LED_RING_STATE_IDLE && s_led.timer_ratio > 0.0f) {
-        // A countdown is running: show the timer_tick bar while idle
-        // (reference: control_leds -> control_leds_timer_ticking).
-        static const led_effect_t tick = {EFFECT_TIMER_TICK, USER_R, USER_G, USER_B, 1.0f, 0.7f};
-        render_timer_tick(colors, &tick);
-        return;
+#endif
     }
     const led_effect_t *e = effect_for_state(s_led.state);
     switch (e->type) {
@@ -384,8 +398,9 @@ esp_err_t led_ring_init(void)
     if (xTaskCreate(led_task, "led_ring", 3072, NULL, 3, NULL) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "LED ring engine started (%d%% master, color #%06X)",
-             CONFIG_LK_LED_BRIGHTNESS_PERCENT, CONFIG_LK_LED_COLOR);
+    ESP_LOGI(TAG, "LED ring engine started (%d%% master, color #%06X, idle %s)",
+             CONFIG_LK_LED_BRIGHTNESS_PERCENT, CONFIG_LK_LED_COLOR,
+             CONFIG_LK_LED_IDLE_SOLID ? "solid" : "dark");
     return ESP_OK;
 #endif
 }

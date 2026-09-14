@@ -174,6 +174,35 @@ menu "Voice Assistant Features"
                 Hard cap for one wake-word session, as a safety net for the
                 VAD-based end detection.
 
+        config LK_SESSION_DIR_FILTER
+            bool "Attribute speech by direction (background rejection)"
+            default y
+            depends on LK_BEAM_LOCK
+            help
+                While the beam is locked on the speaker, VAD activity whose
+                dominant source (XMOS auto-select azimuth) is outside the
+                tolerance of the locked direction counts as background: it
+                no longer extends the session. The end-of-utterance silence
+                timer then closes the session (and the publish gate) even
+                with the TV or other voices still talking - the agent hears
+                silence and finalizes the command instead of waiting out
+                the full session cap. Falls back to plain VAD behavior
+                without a beam lock or fresh direction data. Disable to
+                always use plain VAD-based end detection.
+
+        config LK_SESSION_DIR_TOLERANCE_DEG
+            int "Speaker direction tolerance (degrees)"
+            default 40
+            range 10 90
+            depends on LK_SESSION_DIR_FILTER
+            help
+                Maximum angular difference between the locked speaker
+                direction and the dominant active source for VAD activity
+                to count as speaker speech. Lower values isolate better
+                against nearby noise sources but risk cutting a command
+                short when the speaker moves around; higher values are
+                more forgiving.
+
     endmenu
 
     menu "Microphone AGC"
@@ -253,6 +282,17 @@ menu "Voice Assistant Features"
             default 80
             range 5 100
             depends on LK_LEDS
+
+        config LK_LED_IDLE_SOLID
+            bool "Light the ring while idle (reference look)"
+            default n
+            depends on LK_LEDS
+            help
+                Off by default: the ring stays dark while the assistant is
+                idle and only lights for command phases (wake, listening,
+                thinking, speaking), active timers and the mic-muted
+                indicator. Enable to restore the reference integration's
+                always-lit solid user color.
 
         config LK_LED_COLOR
             hex "User ring color (RGB)"

@@ -111,7 +111,7 @@ All features are configurable under `idf.py menuconfig` →
 | Wake chime | `chime.c` | Synthesized two-tone, played immediately on detection (the XMOS AEC removes it from the mic path). Mute/error tones included. |
 | Publish gate | `mic_source.c` | Mic publishes silence until the wake word; the agent never hears anything in between (like HA voice satellites). Disable with `LK_WAKE_WORD_GATE=n` for an always-open mic. |
 | Beam lock | `xvf3800.c` | On wake, the XMOS AEC fixed beams are pinned to the detected speaker azimuth (AEC servicer cmd 81/37) and released at session end - the published signal keeps isolating that speaker. |
-| LED ring | `led_ring.c` | Idle breathing (or dim red while mic muted), wake spin, beam direction while listening, agent-driven thinking/speaking effects, timer blink, error blink. |
+| LED ring | `led_ring.c` | Dark while idle (LK_LED_IDLE_SOLID restores the reference's solid ring), dim red while mic muted, wake snapshot, beam direction while listening, agent-driven thinking/speaking effects, active-timer countdown bar, error blink. |
 | Local timers | `local_timers.c` | Mirrors the agent's timers over the LiveKit data channel; counts down locally and rings with jingle + LED even if the agent is down. Rings wait for an idle device; wake word or any speech stops them. |
 | Mic AGC | `mic_source.c` | Recommended: normalizes mic level for STT (target -18 dBFS RMS, max +24 dB) and compensates speaker distance; limiter prevents clipping. |
 
@@ -121,8 +121,19 @@ All features are configurable under `idf.py menuconfig` →
 "Hey Willow" -> chime + ring spin -> beam lock at speaker direction
              -> publish gate opens -> agent hears the command
              -> agent state events drive the ring (listening/thinking/speaking)
-             -> ~1.5 s silence after speech -> gate closes, beam released
+             -> ~1.5 s SPEAKER silence after speech -> gate closes, beam released
 ```
+
+**Background rejection** (`LK_SESSION_DIR_FILTER`, on by default): while the
+beam is locked on the speaker, VAD activity only extends the session when the
+XMOS auto-select azimuth (the currently dominant active source) is within
+`LK_SESSION_DIR_TOLERANCE_DEG` (default 40°) of the locked direction. Speech
+from the TV or other family members therefore no longer keeps the session
+open - the end-of-utterance timer runs on *speaker* silence, the gate closes
+(the agent then hears silence and finalizes the command) and the ring returns
+to idle. The session-close log line reports how much VAD activity was
+attributed to background sources for tuning. Without a beam lock or fresh
+direction data the firmware falls back to plain VAD-based end detection.
 
 ### Data channel protocol (LiveKit topics)
 

@@ -38,6 +38,15 @@ static const char *TAG = "session";
 #define BEAM_FRESH_MS       1000  // max age of an azimuth used for beam lock
 #define AZIMUTH_POLL_MS     100   // direction refresh while listening
 #define RING_STOP_SPEECH_MS 400   // speech age that stops a ringing timer
+#define SRC_FRESH_MS        500   // max age of a source direction sample
+
+// Fallbacks: unset Kconfig bools are not defined in sdkconfig.h.
+#ifndef CONFIG_LK_SESSION_DIR_FILTER
+#define CONFIG_LK_SESSION_DIR_FILTER 0
+#endif
+#ifndef CONFIG_LK_SESSION_DIR_TOLERANCE_DEG
+#define CONFIG_LK_SESSION_DIR_TOLERANCE_DEG 40
+#endif
 
 typedef enum {
     SESSION_EVT_WAKE = 0,
@@ -52,6 +61,17 @@ typedef struct {
     float azimuth_rad;
     bool azimuth_valid;
     bool speech_seen;
+    // Directional speech attribution (background rejection): while the
+    // beam is locked on the speaker, VAD activity counts only when the
+    // dominant active source (XMOS auto-select azimuth) is within the
+    // tolerance of the locked direction. Otherwise it is background
+    // (TV, other voices) and does not extend the session.
+    float locked_azimuth_rad;     // speaker direction the beam locked onto
+    bool locked_valid;
+    float src_azimuth_rad;        // latest dominant-source direction
+    int64_t src_azimuth_ms;
+    bool src_azimuth_valid;
+    int32_t bg_speech_ms;         // VAD activity attributed to background
 } session_ctx_t;
 
 static session_ctx_t s_sess;
@@ -60,6 +80,42 @@ static QueueHandle_t s_events;
 static int64_t now_ms(void)
 {
     return esp_timer_get_time() / 1000;
+}
+
+// Smallest angular distance between two azimuth angles (radians, wrap-safe).
+static float angle_diff_rad(float a, float b)
+{
+    float d = a - b;
+    while (d > (float)M_PI) {
+        d -= 2.0f * (float)M_PI;
+    }
+    while (d < -(float)M_PI) {
+        d += 2.0f * (float)M_PI;
+    }
+    return fabsf(d);
+}
+
+// True when the currently detected speech can be attributed to the locked
+// speaker direction. Without a beam lock, with the filter disabled, or
+// without a fresh dominant-source direction it falls back to "yes" - the
+// plain VAD behavior used before the directional filter existed.
+static bool speech_from_speaker(void)
+{
+#if CONFIG_LK_SESSION_DIR_FILTER
+    if (!s_sess.locked_valid || !xvf3800_beam_is_locked()) {
+        return true;
+    }
+    if (!s_sess.src_azimuth_valid ||
+        (now_ms() - s_sess.src_azimuth_ms) > SRC_FRESH_MS) {
+        return true;
+    }
+    const float tolerance = (float)CONFIG_LK_SESSION_DIR_TOLERANCE_DEG
+                            * (float)M_PI / 180.0f;
+    return angle_diff_rad(s_sess.src_azimuth_rad,
+                          s_sess.locked_azimuth_rad) <= tolerance;
+#else
+    return true;
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -72,6 +128,8 @@ static void session_open(void)
     s_sess.started_ms = now_ms();
     s_sess.last_speech_ms = s_sess.started_ms;
     s_sess.speech_seen = false;
+    s_sess.src_azimuth_valid = false;
+    s_sess.bg_speech_ms = 0;
 
     led_ring_set_state(LED_RING_STATE_WAKE);
     chime_play(CHIME_WAKE);
@@ -97,9 +155,12 @@ static void session_open(void)
     if (s_sess.azimuth_valid &&
         (s_sess.started_ms - s_sess.last_azimuth_ms) <= BEAM_FRESH_MS) {
         xvf3800_beam_lock(s_sess.azimuth_rad);
+        s_sess.locked_azimuth_rad = s_sess.azimuth_rad;
+        s_sess.locked_valid = true;
     } else {
         ESP_LOGI(TAG, "No fresh azimuth (%s) - beam stays adaptive",
                  s_sess.azimuth_valid ? "stale" : "none yet");
+        s_sess.locked_valid = false;
         led_ring_clear_beam();
     }
 #endif
@@ -124,11 +185,14 @@ static void session_close(void)
     if (xvf3800_beam_is_locked()) {
         xvf3800_beam_unlock();
     }
+    s_sess.locked_valid = false;
     wake_word_set_armed(true);
     led_ring_set_state(local_timers_is_ringing() ? LED_RING_STATE_TIMER
                                                  : LED_RING_STATE_IDLE);
-    ESP_LOGI(TAG, "Session closed after %.1f s (speech seen: %d)",
-             (now_ms() - s_sess.started_ms) / 1000.0, s_sess.speech_seen);
+    ESP_LOGI(TAG, "Session closed after %.1f s (speaker speech: %d, "
+             "background-only speech: %.1f s)",
+             (now_ms() - s_sess.started_ms) / 1000.0, s_sess.speech_seen,
+             s_sess.bg_speech_ms / 1000.0);
 }
 
 // Called from the WakeNet fetch task; keep it short - the heavy lifting
@@ -175,7 +239,10 @@ static void session_task(void *arg)
         // always-on beam sensor - this keeps a fresh pre-wake direction for
         // the beam lock and the ring display. While the beam is locked the
         // auto-select slot jumps between sources, so display the pinned
-        // fixed-beam slot instead (reference read_led_beam_direction).
+        // fixed-beam slot instead (reference read_led_beam_direction) - and
+        // additionally track the auto-select slot itself: it points at the
+        // currently DOMINANT ACTIVE source, which drives the background
+        // speech attribution below.
         if (++azimuth_divider >= AZIMUTH_POLL_MS / SESSION_TICK_MS) {
             azimuth_divider = 0;
             float az;
@@ -188,14 +255,28 @@ static void session_task(void *arg)
                 s_sess.azimuth_valid = true;
                 led_ring_set_beam_deg(az * 180.0f / (float)M_PI);
             }
+            if (xvf3800_beam_is_locked() &&
+                xvf3800_read_azimuth(&az, XVF3800_BEAM_AUTO) == ESP_OK) {
+                s_sess.src_azimuth_rad = az;
+                s_sess.src_azimuth_ms = now_ms();
+                s_sess.src_azimuth_valid = true;
+            }
         }
 
         // Track speech + session lifetime while a session is open.
         if (s_sess.active) {
             const int64_t now = now_ms();
             if (wake_word_ms_since_speech() < (uint32_t)(2 * SESSION_TICK_MS)) {
-                s_sess.last_speech_ms = now;
-                s_sess.speech_seen = true;
+                // VAD sees speech - but whose? While the beam is locked,
+                // only activity attributable to the speaker's direction
+                // extends the session; TV/other voices count as background
+                // and the end-of-utterance timer keeps running.
+                if (speech_from_speaker()) {
+                    s_sess.last_speech_ms = now;
+                    s_sess.speech_seen = true;
+                } else {
+                    s_sess.bg_speech_ms += SESSION_TICK_MS;
+                }
             }
 
             const bool silence_after_speech =
