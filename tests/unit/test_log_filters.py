@@ -16,7 +16,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agent"))
 
-from log_filters import TeardownNoiseFilter, install  # noqa: E402
+from log_filters import (  # noqa: E402
+    TeardownNoiseFilter,
+    install,
+    is_shutting_down,
+    mark_shutting_down,
+    reset_shutdown_flag,
+)
 
 FILTER = TeardownNoiseFilter()
 
@@ -28,6 +34,14 @@ def root_log_level():
     old_level = root.level
     yield root
     root.setLevel(old_level)
+
+
+@pytest.fixture(autouse=True)
+def shutdown_flag():
+    """Keep the process-global teardown flag isolated between tests."""
+    reset_shutdown_flag()
+    yield
+    reset_shutdown_flag()
 
 
 class FakeAPIStatusError(Exception):
@@ -222,3 +236,115 @@ def test_install_attaches_to_expected_loggers_and_handlers():
         assert any(f is noise_filter for f in logging.getLogger(name).filters)
     for handler in logging.getLogger().handlers:
         assert any(f is noise_filter for f in handler.filters)
+
+# ---------------------------------------------------------------------
+# shutdown-scoped rules (signal client drop, ElevenLabs TTS 1006)
+# ---------------------------------------------------------------------
+
+def make_tts_1006_record() -> logging.LogRecord:
+    """The exact warning from the agent log at job teardown."""
+    return make_record(
+        "livekit.plugins.elevenlabs",
+        logging.WARNING,
+        "recv loop error",
+        exc=FakeAPIStatusError(
+            "ElevenLabs websocket connection closed unexpectedly",
+            status_code=1006,
+        ),
+    )
+
+
+def test_shutdown_flag_toggles():
+    assert is_shutting_down() is False
+    mark_shutting_down()
+    assert is_shutting_down() is True
+    mark_shutting_down()  # idempotent
+    assert is_shutting_down() is True
+    reset_shutdown_flag()
+    assert is_shutting_down() is False
+
+
+def test_signal_client_drop_is_downgraded_during_teardown(root_log_level):
+    mark_shutting_down()
+    root_log_level.setLevel(logging.DEBUG)
+    record = make_record(
+        "livekit",
+        logging.WARNING,
+        "livekit_api::signal_client:530:livekit_api::signal_client - "
+        "dropping pass-through signal \u2014 no stream available",
+    )
+    assert FILTER.filter(record) is True
+    assert record.levelno == logging.DEBUG
+
+
+def test_tts_1006_teardown_warning_is_downgraded(root_log_level):
+    mark_shutting_down()
+    root_log_level.setLevel(logging.DEBUG)
+    record = make_tts_1006_record()
+    assert FILTER.filter(record) is True
+    assert record.levelno == logging.DEBUG
+
+
+def test_teardown_warnings_stay_loud_mid_session(root_log_level):
+    # flag NOT set: a TTS websocket 1006 mid-session is a real provider
+    # hiccup (auto-retried, but worth seeing) - it must keep its level
+    root_log_level.setLevel(logging.DEBUG)
+    tts = make_tts_1006_record()
+    assert FILTER.filter(tts) is True
+    assert tts.levelno == logging.WARNING
+    signal = make_record(
+        "livekit",
+        logging.WARNING,
+        "dropping pass-through signal \u2014 no stream available",
+    )
+    assert FILTER.filter(signal) is True
+    assert signal.levelno == logging.WARNING
+
+
+def test_teardown_warnings_dropped_at_default_log_level(root_log_level):
+    # LOG_LEVEL=info (the default): dropped outright, like the other rules
+    mark_shutting_down()
+    root_log_level.setLevel(logging.INFO)
+    assert FILTER.filter(make_tts_1006_record()) is False
+    signal = make_record(
+        "livekit",
+        logging.WARNING,
+        "livekit_api::signal_client - dropping pass-through signal "
+        "\u2014 no stream available",
+    )
+    assert FILTER.filter(signal) is False
+
+
+def test_signal_rule_requires_both_needles(root_log_level):
+    mark_shutting_down()
+    root_log_level.setLevel(logging.DEBUG)
+    record = make_record(
+        "livekit",
+        logging.WARNING,
+        "unrelated livekit warning that merely mentions a stream",
+    )
+    assert FILTER.filter(record) is True
+    assert record.levelno == logging.WARNING
+
+
+def test_stt_1006_stays_loud_even_during_teardown(root_log_level):
+    # the shutdown rule targets the TTS close message; an STT abnormal
+    # close (different message text) is not covered by it
+    mark_shutting_down()
+    root_log_level.setLevel(logging.DEBUG)
+    record = make_record(
+        "livekit.plugins.elevenlabs",
+        logging.ERROR,
+        "Error in recv_task",
+        exc=FakeAPIStatusError(
+            "ElevenLabs STT connection closed unexpectedly",
+            status_code=1006,
+        ),
+    )
+    assert FILTER.filter(record) is True
+    assert record.levelno == logging.ERROR
+
+
+def test_install_attaches_to_livekit_logger():
+    noise_filter = install()
+    assert any(f is noise_filter for f in logging.getLogger("livekit").filters)

@@ -328,6 +328,26 @@ async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
 
     # ------------------------------------------------------------------
+    # teardown log noise: from the moment the room connection drops (or
+    # the job's shutdown callbacks run), the signal client and the TTS
+    # websocket produce known-benign close noise - log_filters downgrades
+    # it only from this point on, keeping mid-session occurrences loud.
+    # ------------------------------------------------------------------
+
+    def _on_room_disconnected(*_args) -> None:  # noqa: ANN002, ANN003
+        log_filters.mark_shutting_down()
+
+    ctx.room.on("disconnected", _on_room_disconnected)
+
+    async def _mark_teardown() -> None:
+        log_filters.mark_shutting_down()
+
+    try:
+        ctx.add_shutdown_callback(_mark_teardown)
+    except AttributeError:  # older/newer livekit-agents API
+        logger.debug("add_shutdown_callback unavailable; teardown filter flag not set")
+
+    # ------------------------------------------------------------------
     # diagnostics: audit reporter (best-effort, never blocks the pipeline)
     # ------------------------------------------------------------------
     reporter: audit_module.AuditReporter | None = None
