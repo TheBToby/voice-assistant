@@ -43,8 +43,8 @@ ps: ## Show service status
 	docker compose ps
 
 .PHONY: token
-token: ## Mint an access token: make token ID=device-1 ROOM=home
-	docker compose run --rm agent python /app/scripts/mint_token.py --identity $(or $(ID),device-1) --room $(or $(ROOM),home)
+token: ## Mint an access token: make token ID=device-1 ROOM=home [VALID_HOURS=0]
+	docker compose run --rm agent python /app/scripts/mint_token.py --identity $(or $(ID),device-1) --room $(or $(ROOM),home) --valid-hours $(or $(VALID_HOURS),12)
 
 .PHONY: console
 console: ## Open the web console URL (default port 8090)

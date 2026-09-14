@@ -4,12 +4,12 @@
  * The chimes are synthesized at init (sine tones with soft envelopes) instead
  * of shipping binary assets - no flash space, no licensing, easy to tune.
  *
- * Playback path: the room renderer owns the I2S playback device, so local
- * sounds pause the room rendering (av_render_pause), write the generated PCM
- * straight to the playback device in the wire format (16 kHz / stereo /
- * 32-bit slots), and resume the renderer afterwards. The XMOS AEC uses the
- * I2S playback as its reference, so chimes are cancelled from the mic signal
- * and never re-enter the publish path.
+ * Playback path: the media pipeline opens the I2S playback device once and
+ * keeps it open; local sounds pause the room rendering (av_render_pause),
+ * write the generated PCM straight to the playback device in the wire format
+ * (16 kHz / stereo / 32-bit slots), and resume the renderer afterwards. The
+ * XMOS AEC uses the I2S playback as its reference, so chimes are cancelled
+ * from the mic signal and never re-enter the publish path.
  */
 
 #pragma once

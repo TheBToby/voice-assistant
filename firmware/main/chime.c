@@ -174,26 +174,12 @@ static esp_err_t play_span(const int16_t *mono, int samples)
     return ESP_OK;
 }
 
-static bool dev_open(int32_t *opened_here)
+static bool dev_ready(void)
 {
-    *opened_here = 0;
     if (s_dev == NULL) {
         chime_refresh_device();
     }
-    if (s_dev == NULL) {
-        return false;
-    }
-    // The renderer opens the device lazily when the first room-audio stream
-    // starts; if it is not open yet, we open (and close) it ourselves.
-    esp_codec_dev_sample_info_t fs = {
-        .sample_rate = BOARD_I2S_SAMPLE_RATE,
-        .channel = CHIME_OUT_CHANNELS,
-        .bits_per_sample = CHIME_OUT_BITS,
-    };
-    if (esp_codec_dev_open(s_dev, &fs) == ESP_CODEC_DEV_OK) {
-        *opened_here = 1;
-    }
-    return true;
+    return s_dev != NULL;
 }
 
 static void play_sound(chime_sound_t sound)
@@ -201,7 +187,6 @@ static void play_sound(chime_sound_t sound)
     if (sound >= SND_COUNT || s_sounds[sound].pcm == NULL) {
         return;
     }
-    int32_t opened_here = 0;
     av_render_handle_t renderer = (av_render_handle_t)s_renderer;
 
     // Pause room audio so our frames do not interleave with the render
@@ -209,16 +194,14 @@ static void play_sound(chime_sound_t sound)
     if (renderer != NULL) {
         av_render_pause(renderer, true);
     }
-    if (!dev_open(&opened_here)) {
-        if (renderer != NULL) {
-            av_render_pause(renderer, false);
-        }
-        ESP_LOGW(TAG, "No playback device - chime dropped");
-        return;
-    }
-    play_span(s_sounds[sound].pcm, s_sounds[sound].len);
-    if (opened_here) {
-        esp_codec_dev_close(s_dev);
+    // The playback device is opened once by the media pipeline (media.c) and
+    // never closed - do NOT open/close it here: esp_codec_dev_open() reports
+    // ESP_CODEC_DEV_OK even when the device is already open (by the room
+    // renderer), and the close then killed the renderer's device so room
+    // audio never played again after the first chime.
+    if (!dev_ready() ||
+        play_span(s_sounds[sound].pcm, s_sounds[sound].len) != ESP_OK) {
+        ESP_LOGW(TAG, "Chime dropped (no playback device or write failed)");
     }
     if (renderer != NULL) {
         av_render_pause(renderer, false);

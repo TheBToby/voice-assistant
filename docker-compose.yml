@@ -103,6 +103,7 @@ services:
       TRANSCRIPTS_ENABLED: ${TRANSCRIPTS_ENABLED:-false}
       ROOM_NAME: ${ROOM_NAME:-home}
       TOKEN_VALID_HOURS: ${TOKEN_VALID_HOURS:-12}
+      DEVICE_RECONNECT_INTERVAL_S: ${DEVICE_RECONNECT_INTERVAL_S:-30}
       TZ: ${TZ:-Etc/UTC}
     volumes:
       # console DB (settings overrides, devices, audit log) = persistent data

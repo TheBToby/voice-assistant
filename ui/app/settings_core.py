@@ -127,7 +127,15 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
     SettingDef(
         "token_valid_hours", "TOKEN_VALID_HOURS", "12", KIND_INT,
         "Token validity (hours)", "Devices & tokens",
-        "Lifetime of access tokens minted in the console.",
+        "Default lifetime of access tokens minted in the console. "
+        "0 = tokens do not expire.",
+    ),
+    SettingDef(
+        "device_reconnect_interval_s", "DEVICE_RECONNECT_INTERVAL_S", "30",
+        KIND_INT,
+        "Device reconnect interval (seconds)", "Devices & tokens",
+        "Delay between a device's room connection retries once its fast "
+        "early retries are exhausted (firmware reads this at runtime).",
     ),
     # --- diagnostics ---------------------------------------------------------
     SettingDef(
@@ -198,6 +206,39 @@ def parse_bool(value: object, default: bool | None = False) -> bool | None:
     return default
 
 
+TOKEN_NO_EXPIRY_HOURS = 0
+# livekit-api always writes an `exp` claim (6 h default when with_ttl is
+# skipped), so "no expiry" is minted as a far-future expiry instead.
+TOKEN_NO_EXPIRY_TTL_DAYS = 3650  # 10 years - effectively non-expiring
+_TOKEN_NEVER_WORDS = {"never", "no-expiry", "no_expiry", "none", "infinite"}
+_TOKEN_MAX_HOURS = 24 * 365  # 8760 h = 1 year; for longer use no-expiry
+
+
+def parse_token_hours(raw: object, default: str | int = 12) -> int | None:
+    """Token lifetime in hours from a client payload or setting value.
+
+    Accepts positive integers (capped at 744 = 31 days) and explicit
+    "no expiry" forms (0 / "0" / "never"), which map to 0. Returns None when
+    the value is not a usable number. Empty/None falls back to `default`
+    (the console setting), which is parsed with the same rules.
+    """
+    value = raw
+    if value is None or (isinstance(value, str) and not value.strip()):
+        value = default if str(default).strip() else 12
+    if isinstance(value, bool):
+        return None
+    text = str(value).strip().lower()
+    if text in _TOKEN_NEVER_WORDS:
+        return TOKEN_NO_EXPIRY_HOURS
+    try:
+        hours = int(float(text))
+    except (ValueError, TypeError):
+        return None
+    if hours < TOKEN_NO_EXPIRY_HOURS or hours > _TOKEN_MAX_HOURS:
+        return None
+    return hours
+
+
 LANGUAGE_ALIASES = {"german": "de", "deutsch": "de", "english": "en"}
 
 
@@ -242,8 +283,14 @@ def validate_updates(updates: dict[str, str], env: dict | None = None) -> list[s
             except ValueError:
                 problems.append(f"{d.label}: not a number")
                 continue
-            if key == "token_valid_hours" and not 1 <= number <= 24 * 31:
-                problems.append("Token validity must be between 1 and 744 hours")
+            if key == "token_valid_hours" and not 0 <= number <= 24 * 365:
+                problems.append(
+                    "Token validity must be 0 (no expiry) or 1-8760 hours"
+                )
+            if key == "device_reconnect_interval_s" and not 5 <= number <= 3600:
+                problems.append(
+                    "Device reconnect interval must be between 5 and 3600 seconds"
+                )
             if key == "diagnostics_history_days" and not 1 <= number <= 3650:
                 problems.append("Diagnostics history must be between 1 and 3650 days")
         elif d.kind == KIND_BOOL:

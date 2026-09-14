@@ -147,6 +147,34 @@ The wake word only works while the room is connected (the capture pipeline
 feeds the detector). The session flow likewise assumes the agent publishes
 `session.state`; without it the ring simply stays in the listening effect.
 
+### Connection resilience (connection.c)
+
+The LiveKit engine self-heals short drops with a few quick retries
+(`CONFIG_LK_MAX_RETRIES`). When that is not enough - server down during
+boot, router reboot, expired token - the connection supervisor
+(`main/connection.c`) takes over and keeps trying **forever while the
+network is up**:
+
+```
+network up -> join room -> (engine's quick retries) -> connected?
+  -> stay; the engine self-heals short drops on its own
+  -> still down -> leave, wait 5, 10, 20, 40, ... s (doubling, capped at
+     the configured interval) -> fresh join attempt
+```
+
+- A fresh IP event (device (re)connected to the network) shortens the
+  current wait, so the device reconnects promptly once WiFi is back.
+- Every failed cycle logs the LiveKit failure reason. `Bad Token` comes
+  with an explicit hint that the pre-minted token expired - mint a new one
+  (console Devices tab or `make token ID=... ROOM=...`, e.g. with
+  *no expiry*) and re-flash.
+- The steady-state retry interval is the console setting
+  *Device reconnect interval (seconds)* (`DEVICE_RECONNECT_INTERVAL_S`,
+  default 30). Devices fetch it at runtime from
+  `GET /api/device-config` on the console (`LK_CONSOLE_URL`, set to empty
+  in menuconfig to disable; the build-time fallback is
+  `LK_RECONNECT_INTERVAL_S`).
+
 ## Prerequisites
 
 - ESP-IDF **>= 5.4** (upstream SDK requirement; tested by upstream with
@@ -177,13 +205,21 @@ WiFi credentials and the LiveKit server URL are preset in
 Tokens are minted by the stack (room name is encoded in the token):
 
 ```bash
-make token ID=respeaker-1 ROOM=home     # from the repo root
+make token ID=respeaker-1 ROOM=home               # 12 h validity (default)
+make token ID=respeaker-1 ROOM=home VALID_HOURS=0 # no expiry (10-year token)
 ```
+
+Tokens for devices should be long-lived or non-expiring - an expired token is
+rejected by the server (`Bad Token` in the device log) and the device cannot
+rejoin after a reboot until it is re-flashed with a fresh one.
 
 Then put the token into the firmware - either `idf.py menuconfig` →
 *LiveKit Example* → *Room access token*, or edit `CONFIG_LK_EXAMPLE_TOKEN=`
 in `sdkconfig.defaults` and rebuild. The device identity (`respeaker-1`)
-and room (`home`) are whatever you minted.
+and room (`home`) are whatever you minted. While in menuconfig, also check
+*Console URL for runtime device settings* (`LK_CONSOLE_URL`) - it should
+point at the web console (`http://<host>:8090`), from which the device picks
+up the reconnect interval at runtime.
 
 ## Verify
 

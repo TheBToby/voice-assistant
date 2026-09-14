@@ -32,7 +32,10 @@ def main() -> int:
         "--api-secret", default=os.getenv("LIVEKIT_API_SECRET", "")
     )
     parser.add_argument(
-        "--valid-hours", type=int, default=12, help="token lifetime in hours"
+        "--valid-hours",
+        type=int,
+        default=12,
+        help="token lifetime in hours (0 = token never expires)",
     )
     parser.add_argument(
         "--no-publish", action="store_true", help="disallow publishing (listen only)"
@@ -53,17 +56,23 @@ def main() -> int:
         can_subscribe=True,
         can_publish_data=True,
     )
-    token = (
+    builder = (
         api.AccessToken(args.api_key, args.api_secret)
         .with_identity(args.identity)
         .with_name(args.name or args.identity)
         .with_grants(grants)
-        .with_ttl(timedelta(hours=args.valid_hours))
-        .to_jwt()
     )
+    if args.valid_hours > 0:
+        builder = builder.with_ttl(timedelta(hours=args.valid_hours))
+    else:
+        # livekit-api always writes an exp claim (6 h default!), so mint a
+        # far-future expiry for "no expiry".
+        builder = builder.with_ttl(timedelta(days=3650))
+    token = builder.to_jwt()
 
     print(f"# room    : {args.room}")
     print(f"# identity: {args.identity}")
+    print(f"# valid   : {'never expires' if args.valid_hours <= 0 else f'{args.valid_hours} h'}")
     if args.ws_url:
         print(f"# url     : {args.ws_url}")
     print(token)

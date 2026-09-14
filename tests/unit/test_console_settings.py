@@ -44,20 +44,55 @@ def test_validate_choices_and_ints():
             "weather_units": "kelvin",
             "diagnostics_history_days": "0",
             "token_valid_hours": "abc",
+            "device_reconnect_interval_s": "2",
             "transcripts_enabled": "maybe",
         },
         base_env(),
     )
-    assert len(problems) == 4
+    assert len(problems) == 5
     assert sc.validate_updates(
         {
             "weather_units": "imperial",
             "diagnostics_history_days": "90",
             "token_valid_hours": "24",
+            "device_reconnect_interval_s": "60",
             "transcripts_enabled": "true",
         },
         base_env(),
     ) == []
+
+
+def test_token_valid_hours_allows_no_expiry():
+    # 0 = tokens never expire; 8760 h = 1 year; out-of-range values rejected
+    assert sc.validate_updates({"token_valid_hours": "0"}, base_env()) == []
+    assert sc.validate_updates({"token_valid_hours": "8760"}, base_env()) == []
+    problems = sc.validate_updates({"token_valid_hours": "8761"}, base_env())
+    assert any("no expiry" in p for p in problems)
+
+
+def test_parse_token_hours():
+    default = "12"
+    # empty/absent -> console default (parsed with the same rules)
+    assert sc.parse_token_hours(None, default) == 12
+    assert sc.parse_token_hours("", default) == 12
+    assert sc.parse_token_hours("  ", default) == 12
+    # explicit no-expiry forms
+    assert sc.parse_token_hours(0, default) == 0
+    assert sc.parse_token_hours("0", default) == 0
+    assert sc.parse_token_hours("never", default) == 0
+    assert sc.parse_token_hours("No-Expiry", default) == 0
+    # plain hours (ints, numeric strings, floats)
+    assert sc.parse_token_hours(24, default) == 24
+    assert sc.parse_token_hours("168", default) == 168
+    assert sc.parse_token_hours("1.5", default) == 1
+    assert sc.parse_token_hours("8760", default) == 8760  # 1 year
+    # unusable values -> None (caller rejects with 422)
+    assert sc.parse_token_hours("abc", default) is None
+    assert sc.parse_token_hours(-5, default) is None
+    assert sc.parse_token_hours("99999", default) is None
+    assert sc.parse_token_hours(True, default) is None
+    # a no-expiry console default also works
+    assert sc.parse_token_hours(None, "0") == 0
 
 
 def test_validate_unknown_key_and_ha_pairing():

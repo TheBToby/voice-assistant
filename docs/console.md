@@ -10,11 +10,36 @@ What it gives you:
 | Tab | Purpose |
 |---|---|
 | **Dashboard** | Connectivity at a glance: LiveKit server, agent worker heartbeat, MCP server status (name, URL, reachability), provider key status, audit log size |
-| **Devices** | Every device identity ever seen (reSpeaker, browsers): friendly names, online state (from the LiveKit server), rooms, last seen, session counts; mint access tokens |
+| **Devices** | Every device identity ever seen (reSpeaker, browsers): friendly names, online state (from the LiveKit server), rooms, last seen, session counts; mint access tokens with a selectable validity — preset durations or **no expiry** for devices |
 | **MCP Servers** | Add / edit / enable / remove MCP servers at runtime - no `.env` edit, no restart; per-server details (protocol version, server name, latency) with the tools each server offers, per-tool enable/disable switches, and a **tool tester** for calling tools with typed requests |
 | **Settings** | All non-fundamental settings (persona, models, Home Assistant, diagnostics retention) with env defaults + stored overrides |
 | **Audit Log** | Interaction trail (sessions, tools, timers, logins, config changes), filterable, exportable (CSV/JSON), retention configurable in days |
-| **Talk** | The browser test client: one click mints a token server-side and joins the default room |
+| **Talk** | The browser test client: one click mints a token server-side and joins the default room; commands can be **spoken or typed** (typed commands travel on the `assistant.text` topic and are answered through the full pipeline - tools + TTS audio - even while the reSpeaker is in the room) |
+
+## Devices & tokens
+
+- **Registry persistence**: every known device (including identities you mint
+  tokens for and participants seen live in a room) is stored in the console
+  database on the persistent `console-data` volume - devices survive console
+  restarts, rebuilds and audit-log retention. The startup log line
+  `console database: /data/console.db (devices: N, ...)` shows exactly where
+  the registry lives; if devices "disappear" after an update, that volume
+  moved or was removed (`docker compose down -v` deletes it).
+- **Token validity**: the mint form offers preset durations (1 hour ... 1
+  year) and **no expiry** - minted as a 10-year token (the LiveKit token
+  library always writes an expiry; it defaults to just 6 hours when unset).
+  The per-mint choice overrides the `Token validity (hours)` setting
+  (`TOKEN_VALID_HOURS`, `0` = minted tokens do not expire by default).
+  Long-lived or no-expiry tokens are recommended for device firmware so a
+  device keeps reconnecting after a power cycle; a rejected token shows up
+  in the device logs as failure reason `Bad Token`.
+- **Device reconnect interval**: `Device reconnect interval (seconds)`
+  (`DEVICE_RECONNECT_INTERVAL_S`, default 30) controls how long a firmware
+  device waits between room connection retries once its fast early retries
+  are exhausted. Devices fetch this value at runtime via the public,
+  read-only `GET /api/device-config` endpoint (LAN, no secrets) - changing
+  the setting takes effect on the device without re-flashing.
+
 
 ## Access control
 

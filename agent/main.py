@@ -447,6 +447,41 @@ async def entrypoint(ctx: JobContext) -> None:
 
     ctx.room.on("data_received", _on_data_received)
 
+    # ------------------------------------------------------------------
+    # typed commands (console "Talk" page): a text stream on the
+    # "assistant.text" topic is treated like a spoken command by ANY
+    # participant. RoomIO's built-in lk.chat handling only accepts the
+    # first (linked) participant - with the reSpeaker usually sitting in
+    # the room, a late-joining browser would be ignored. Answered through
+    # the normal pipeline (tools + TTS audio), so it is a full dry test.
+    # ------------------------------------------------------------------
+    def _on_typed_command(reader, participant_identity: str) -> None:  # noqa: ANN001
+        async def _handle() -> None:
+            try:
+                text = (await reader.read_all()).strip()
+            except Exception:  # noqa: BLE001 - broken stream: drop it
+                return
+            if not text:
+                return
+            logger.info("typed command from %s: %r", participant_identity,
+                        text[:200])
+            if reporter is not None:
+                reporter.user_input(text)
+            try:
+                await session.interrupt()
+                session.generate_reply(user_input=text, input_modality="text")
+            except Exception:  # noqa: BLE001 - e.g. session not running yet
+                logger.warning("could not process typed command", exc_info=True)
+
+        asyncio.create_task(_handle())
+
+    try:
+        ctx.room.register_text_stream_handler(
+            "assistant.text", _on_typed_command
+        )
+    except (AttributeError, ValueError) as exc:
+        logger.debug("text stream handler unavailable: %s", exc)
+
     if reporter is not None:
         reporter.event(
             "session.started",

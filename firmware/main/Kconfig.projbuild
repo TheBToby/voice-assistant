@@ -15,6 +15,26 @@ menu "LiveKit Example"
             repo root with: make token ID=respeaker-1 ROOM=home
             The room name is encoded in the token, not set here.
 
+    config LK_CONSOLE_URL
+        string "Console URL for runtime device settings (empty = disabled)"
+        default "http://192.168.0.29:8090"
+        help
+            The firmware reads runtime settings from the web console at this
+            URL (GET /api/device-config): currently the reconnect interval
+            used after the fast early retries. Empty disables the fetch and
+            the fixed fallback below is used. Host-only HTTP on the LAN - no
+            secrets are requested or sent.
+
+    config LK_RECONNECT_INTERVAL_S
+        int "Fallback reconnect interval (seconds)"
+        default 30
+        range 5 3600
+        help
+            Delay between room connection retries once the fast early
+            retries are exhausted. Used when the console URL above is unset
+            or unreachable; otherwise the console setting
+            (Devices & tokens -> Device reconnect interval) wins.
+
     config LK_AUDIO_INPUT_SHIFT
         int "Mic capture gain reduction (right shift, bits)"
         default 2

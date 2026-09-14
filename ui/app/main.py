@@ -546,6 +546,14 @@ def create_app() -> FastAPI:
                         "current_room": participant.get("room", ""),
                     }
                 )
+                # Persist live participants the registry has not seen yet
+                # (e.g. the agent's audit reporter was down when they joined)
+                # so they survive console restarts like every other device.
+                state.db.upsert_device(
+                    identity,
+                    room=participant.get("room", ""),
+                    seen_ts=time.time(),
+                )
         return {
             "devices": devices,
             "livekit_ok": livekit["ok"],
@@ -734,10 +742,14 @@ def create_app() -> FastAPI:
             str(body.get("room", "") or "").strip()
             or values.get("room_name", "home")
         )
-        try:
-            hours = int(body.get("hours") or values.get("token_valid_hours", "12"))
-        except ValueError:
-            hours = 12
+        hours = settings_core.parse_token_hours(
+            body.get("hours"), values.get("token_valid_hours", "12")
+        )
+        if hours is None:
+            raise HTTPException(
+                status_code=422,
+                detail="hours must be 0/never (no expiry) or 1-8760",
+            )
         api_key = str(state.env.get("LIVEKIT_API_KEY", "") or "")
         api_secret = str(state.env.get("LIVEKIT_API_SECRET", "") or "")
         if not api_key or not api_secret:
@@ -749,7 +761,7 @@ def create_app() -> FastAPI:
 
         from livekit import api as lk_api
 
-        token = (
+        builder = (
             lk_api.AccessToken(api_key, api_secret)
             .with_identity(identity)
             .with_name(identity)
@@ -762,16 +774,33 @@ def create_app() -> FastAPI:
                     can_publish_data=True,
                 )
             )
-            .with_ttl(timedelta(hours=hours))
-            .to_jwt()
         )
+        # hours == 0: "no expiry". livekit-api always writes an exp claim
+        # (defaulting to just 6 h when with_ttl is skipped!), so this is
+        # minted as a far-future expiry instead - effectively non-expiring.
+        if hours > settings_core.TOKEN_NO_EXPIRY_HOURS:
+            builder = builder.with_ttl(timedelta(hours=hours))
+        else:
+            builder = builder.with_ttl(
+                timedelta(days=settings_core.TOKEN_NO_EXPIRY_TTL_DAYS)
+            )
+        token = builder.to_jwt()
         url = str(
             state.env.get("PUBLIC_LIVEKIT_WS_URL", "")
             or state.env.get("LIVEKIT_URL", "")
             or ""
         )
+        # Register the device now so it shows up (offline) before its first
+        # session - registry entries otherwise only appear via agent events.
+        state.db.upsert_device(identity, room=room)
         state.record_event(
-            "token.minted", {"identity": identity, "room": room, "hours": hours}
+            "token.minted",
+            {
+                "identity": identity,
+                "room": room,
+                "hours": hours,
+                "expires": hours > settings_core.TOKEN_NO_EXPIRY_HOURS,
+            },
         )
         return {
             "token": token,
@@ -779,7 +808,26 @@ def create_app() -> FastAPI:
             "room": room,
             "identity": identity,
             "hours": hours,
+            "expires": hours > settings_core.TOKEN_NO_EXPIRY_HOURS,
         }
+
+    # ------------------------------------------------------------------
+    # device-facing config (public: read-only, LAN, no secrets)
+    # ------------------------------------------------------------------
+    @app.get("/api/device-config", include_in_schema=False)
+    async def api_device_config() -> dict:
+        """Runtime settings for constrained devices (firmware).
+
+        Intentionally unauthenticated: devices have no console credentials,
+        and the payload carries a single non-sensitive number. Extend with
+        care - everything here is world-readable on the network.
+        """
+        values = state.effective_settings()
+        try:
+            interval = int(values.get("device_reconnect_interval_s", "30"))
+        except ValueError:
+            interval = 30
+        return {"reconnect_interval_s": max(5, min(interval, 3600))}
 
     # ------------------------------------------------------------------
     # internal API for the agent (bearer token)
@@ -847,6 +895,17 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def _startup() -> None:
         app.state.retention_task = asyncio.create_task(retention_loop())
+        # Make the persistence location obvious: devices, settings overrides
+        # and the audit log all live in this SQLite file (the console data
+        # volume). If devices "disappear" after a rebuild, this path moved.
+        logger.info(
+            "console database: %s (devices: %d, settings overrides: %d, "
+            "audit events: %d)",
+            state.data_dir / "console.db",
+            len(state.db.list_devices()),
+            len(state.db.get_settings()),
+            state.db.count_events(),
+        )
         logger.info(
             "console ready on port %s (local auth: %s, oidc: %s)",
             state.env.get("UI_PORT", "8090"),

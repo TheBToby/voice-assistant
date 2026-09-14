@@ -39,6 +39,15 @@
 <button id="connect">Connect &amp; talk</button>
 <button id="disconnect" class="danger" disabled>Disconnect</button>
 
+<label>Type a command (works without a microphone - handy for testing)
+  <div>
+    <input id="text-input" style="width:70%"
+           placeholder="e.g. wie viel Uhr ist es? / set a timer for 2 minutes"
+           autocomplete="off" />
+    <button id="text-send" disabled>Send</button>
+  </div>
+</label>
+
 <div id="status">idle</div>
 <audio id="remote-audio" autoplay></audio>
 
@@ -50,6 +59,8 @@
   const statusEl = document.getElementById('status');
   const connectBtn = document.getElementById('connect');
   const disconnectBtn = document.getElementById('disconnect');
+  const textInput = document.getElementById('text-input');
+  const textSend = document.getElementById('text-send');
   let room = null;
 
   function log(msg) {
@@ -144,8 +155,10 @@
       await room.connect(url, token);
       log('connected to room: ' + room.name);
 
+      textSend.disabled = false;
       if (!micAvailable()) {
         log('ERROR: ' + micHint());
+        log('tip: you can still test via the text command field below.');
       } else {
         await room.localParticipant.setMicrophoneEnabled(true);
         log('microphone live - start talking');
@@ -161,7 +174,31 @@
     if (room) { await room.disconnect(); room = null; }
     connectBtn.disabled = false;
     disconnectBtn.disabled = true;
+    textSend.disabled = true;
     log('session ended');
+  });
+
+  // ------------------------------------------------------------------
+  // Text commands: sent as a LiveKit text stream on the 'assistant.text'
+  // topic. The agent answers typed commands like spoken ones (full
+  // pipeline: tools + TTS audio) - regardless of which participant is
+  // linked, so it works even while the reSpeaker is in the room.
+  // ------------------------------------------------------------------
+  async function sendText() {
+    const text = textInput.value.trim();
+    if (!text) return;
+    if (!room) { log('not connected - press "Connect & talk" first'); return; }
+    try {
+      await room.localParticipant.sendText(text, { topic: 'assistant.text' });
+      log('you (text): ' + text);
+      textInput.value = '';
+    } catch (err) {
+      log('ERROR sending text: ' + err.message);
+    }
+  }
+  textSend.addEventListener('click', () => { sendText().catch((e) => log(e.message)); });
+  textInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { sendText().catch((err) => log(err.message)); }
   });
 </script>
 </body>

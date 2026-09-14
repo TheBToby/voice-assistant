@@ -276,13 +276,17 @@ $("#device-add").addEventListener("click", async () => {
 $("#token-mint").addEventListener("click", async () => {
   const identity = $("#token-identity").value.trim() || `web-${Math.random().toString(36).slice(2, 6)}`;
   const room = $("#token-room").value.trim();
+  const hoursChoice = $("#token-hours").value;
+  const body = { identity, room };
+  if (hoursChoice !== "") body.hours = Number(hoursChoice); // 0 = no expiry
   try {
-    const result = await api("api/tokens/mint", { method: "POST", body: { identity, room } });
+    const result = await api("api/tokens/mint", { method: "POST", body });
+    const validity = result.expires ? `${result.hours} h` : "no expiry (10-year token)";
     const out = $("#token-output");
     out.classList.remove("hidden");
     out.textContent =
       `url     : ${result.url || "(set PUBLIC_LIVEKIT_WS_URL)"}\n` +
-      `room    : ${result.room}\nidentity: ${result.identity}\nvalid   : ${result.hours} h\n\n${result.token}`;
+      `room    : ${result.room}\nidentity: ${result.identity}\nvalid   : ${validity}\n\n${result.token}`;
   } catch (err) { toast(err.message, true); }
 });
 /* ------------------------------------------------------------------ */

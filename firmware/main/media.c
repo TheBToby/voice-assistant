@@ -101,6 +101,23 @@ static int build_renderer_system(void)
     };
     av_render_set_fixed_frame_info(renderer_system.av_renderer_handle, &frame_info);
 
+    // Open the playback device here and keep it open for the lifetime of the
+    // pipeline. The I2S renderer only opens it lazily on the first subscribed
+    // audio stream, and esp_codec_dev reports ESP_CODEC_DEV_OK for an
+    // ALREADY-open device - chime.c used to misread that as "I opened it",
+    // closed the device behind the renderer's back after each local sound,
+    // and the render thread then failed every following write (agent replies
+    // silently never played again). With the open owned here and never
+    // released, both writers are safe: the chime only writes while the
+    // renderer is paused, and nothing closes the device.
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = BOARD_I2S_SAMPLE_RATE,
+        .channel = BOARD_I2S_CHANNELS,
+        .bits_per_sample = BOARD_I2S_SLOT_BITS,
+    };
+    NULL_CHECK(esp_codec_dev_open(render_device, &fs) == ESP_CODEC_DEV_OK,
+               "Failed to open playback device");
+
     // Local notification sounds pause the room renderer while they play
     // (see main/chime.c).
     chime_attach_renderer(renderer_system.av_renderer_handle);

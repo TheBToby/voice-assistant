@@ -45,6 +45,19 @@ bool example_room_connected(void)
     return room_connected;
 }
 
+const char *example_failure_reason(void)
+{
+    if (room_handle == NULL) {
+        return NULL;
+    }
+    livekit_failure_reason_t reason =
+        livekit_room_get_failure_reason(room_handle);
+    if (reason == LIVEKIT_FAILURE_REASON_NONE) {
+        return NULL;
+    }
+    return livekit_failure_reason_str(reason);
+}
+
 bool example_publish_event(const char *json)
 {
     if (room_handle == NULL || !room_connected || json == NULL) {

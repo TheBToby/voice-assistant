@@ -7,9 +7,8 @@
 
 #include "board.h"
 #include "chime.h"
-#include "example.h"
+#include "connection.h"
 #include "led_ring.h"
-#include "livekit_example_utils.h"
 #include "local_timers.h"
 #include "media.h"
 #include "voice_session.h"
@@ -55,9 +54,11 @@ void app_main(void)
         ESP_LOGE(TAG, "Voice session init failed");
     }
 
-    if (lk_example_network_connect()) {
-        join_room(); // See example.c
-    } else {
-        ESP_LOGE(TAG, "Network connection failed - not joining room");
+    // Connection supervision (network + room): joins the room once the
+    // network is up and keeps retrying with escalating delay (interval
+    // configurable in the console) if the server cannot be reached - the
+    // device no longer stays offline after failed first connection trials.
+    if (connection_init() != ESP_OK) {
+        ESP_LOGE(TAG, "Connection supervisor init failed");
     }
 }
